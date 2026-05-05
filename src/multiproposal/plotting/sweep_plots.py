@@ -30,6 +30,39 @@ def _unique_legend(fig, axes, loc="center left", bbox_to_anchor=(1.02, 0.5), nco
         fig.legend(handles, labels, loc=loc, bbox_to_anchor=bbox_to_anchor, ncol=ncol, frameon=frameon)
 
 
+def _proposal_and_algorithm_legends(
+    fig,
+    P_sorted,
+    color_by_P,
+    algorithm_handles,
+    proposal_title="Proposal count",
+    algorithm_title="Algorithm",
+    proposal_anchor=(1.02, 0.65),
+    algorithm_anchor=(1.02, 0.35),
+):
+    proposal_handles = [
+        Line2D([0], [0], color=color_by_P[P], linewidth=2)
+        for P in P_sorted
+    ]
+    proposal_labels = [f"$p$={P}" for P in P_sorted]
+    fig.legend(
+        proposal_handles,
+        proposal_labels,
+        title=proposal_title,
+        loc="center left",
+        bbox_to_anchor=proposal_anchor,
+        frameon=False,
+    )
+    fig.legend(
+        algorithm_handles,
+        [h.get_label() for h in algorithm_handles],
+        title=algorithm_title,
+        loc="center left",
+        bbox_to_anchor=algorithm_anchor,
+        frameon=False,
+    )
+
+
 def _post_sample_count(entry, burn_in):
     if entry is None:
         return None
@@ -109,7 +142,7 @@ def plot_trace_grid(
             lw = highlight_lw if is_highlight else trace_lw
             ax.plot(segment[:, 0], color="#1f77b4", linewidth=lw, label=r"$x_1$", alpha=0.8)
             ax.plot(segment[:, 1], color="red", linewidth=lw, label=r"$x_2$", alpha=0.4)
-            ax.set_title(fr"$P={P}, \rho={rho:.2f}$")
+            ax.set_title(fr"$p={P}, \rho={rho:.2f}$")
 
         for ax in axes[len(rho_list_plot):]:
             ax.axis("off")
@@ -129,7 +162,7 @@ def plot_trace_grid(
             frameon=False,
         )
 
-        fig.suptitle(f"{method_label} trace plots (P={P})")
+        fig.suptitle(f"{method_label} trace plots ($p$={P})")
         fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92))
         reports_dir.mkdir(parents=True, exist_ok=True)
         format_kwargs = {"P": P, "seed_base": seed_base}
@@ -223,7 +256,6 @@ def plot_ess_msjd_vs_rho(
             marker="o",
             markersize=3,
             color=color_by_P[P],
-            label=f"{method_label} (P={P})",
         )
         ax_ess_max.plot(
             rho_list,
@@ -231,7 +263,6 @@ def plot_ess_msjd_vs_rho(
             marker="o",
             markersize=3,
             color=color_by_P[P],
-            label=f"{method_label} (P={P})",
         )
         if show_independent and results.get("pcn_independent"):
             indep_entries = results["pcn_independent"].get(P)
@@ -252,20 +283,18 @@ def plot_ess_msjd_vs_rho(
                 ax_ess_mean.plot(
                     rho_list,
                     indep_vals,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} (P={P})",
                 )
                 ax_ess_max.plot(
                     rho_list,
                     indep_vals,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} (P={P})",
                 )
     if show_pcn and pcn_ess is not None:
-        ax_ess_mean.plot(rho_list, pcn_ess, color="black", marker="o", markersize=3, linestyle="-", label="pCN")
-        ax_ess_max.plot(rho_list, pcn_ess, color="black", marker="o", markersize=3, linestyle="-", label="pCN")
+        ax_ess_mean.plot(rho_list, pcn_ess, color="black", marker="o", markersize=3, linestyle=":")
+        ax_ess_max.plot(rho_list, pcn_ess, color="black", marker="o", markersize=3, linestyle=":")
     if show_mess and run_mess:
         for P in P_sorted:
             mess_uniform = results["mess_uniform"][P]["metrics"]["ess_mean"]
@@ -305,7 +334,6 @@ def plot_ess_msjd_vs_rho(
             marker="o",
             markersize=3,
             color=color_by_P[P],
-            label=f"{method_label} (P={P})",
         )
         if show_independent and results.get("pcn_independent"):
             indep_entries = results["pcn_independent"].get(P)
@@ -317,9 +345,8 @@ def plot_ess_msjd_vs_rho(
                 ax_msjd_mean.plot(
                     rho_list,
                     msjd_mean_vals,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} mean (P={P})",
                 )
     if show_pcn and pcn_msjd is not None:
         ax_msjd_mean.plot(
@@ -328,8 +355,7 @@ def plot_ess_msjd_vs_rho(
             color="black",
             marker="o",
             markersize=3,
-            linestyle="-",
-            label="pCN",
+            linestyle=":",
         )
     if show_mess and run_mess:
         for P in P_sorted:
@@ -355,31 +381,20 @@ def plot_ess_msjd_vs_rho(
     if share_y_metrics:
         _shared_ylim([ax_ess_mean, ax_msjd_mean])
 
-    color_handles = [
-        Line2D([0], [0], color=color_by_P[P], linewidth=2, label=f"{method_label} (P={P})")
-        for P in P_sorted
+    algorithm_handles = [
+        Line2D([0], [0], color="black", linestyle="-", linewidth=2, label=method_label),
     ]
     if show_pcn and pcn_ess is not None:
-        color_handles.append(Line2D([0], [0], color="black", linewidth=2, label="pCN"))
-    line_handles = [
-        Line2D([0], [0], color="gray", linestyle="-", linewidth=2, label=f"{method_label}/pCN"),
-    ]
+        algorithm_handles.append(Line2D([0], [0], color="black", linestyle=":", linewidth=2, label="pCN"))
     if show_independent and results.get("pcn_independent"):
-        line_handles.append(Line2D([0], [0], color="gray", linestyle="--", linewidth=2, label="independent chains"))
-
-    fig_mean.legend(
-        handles=color_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.65),
-        frameon=False,
-        title="Algorithm",
-    )
-    fig_mean.legend(
-        handles=line_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.35),
-        frameon=False,
-        title="Line",
+        algorithm_handles.append(
+            Line2D([0], [0], color="black", linestyle="--", linewidth=2, label="EP-pCN ($p$-thinned)")
+        )
+    _proposal_and_algorithm_legends(
+        fig_mean,
+        P_sorted,
+        color_by_P,
+        algorithm_handles,
     )
 
     fig_mean.suptitle(fr"{title_prefix}: ESS/MSJD mean vs $\rho$")
@@ -403,7 +418,6 @@ def plot_ess_msjd_vs_rho(
             marker="o",
             markersize=3,
             color=color_by_P[P],
-            label=f"{method_label} (P={P})",
         )
         if show_independent and results.get("pcn_independent"):
             indep_entries = results["pcn_independent"].get(P)
@@ -417,7 +431,6 @@ def plot_ess_msjd_vs_rho(
                     msjd_max_vals,
                     linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} max (P={P})",
                 )
     if show_pcn and pcn_msjd is not None:
         ax_msjd_max.plot(
@@ -426,8 +439,7 @@ def plot_ess_msjd_vs_rho(
             color="black",
             marker="o",
             markersize=3,
-            linestyle="-",
-            label="pCN",
+            linestyle=":",
         )
     if show_mess and run_mess:
         for P in P_sorted:
@@ -453,19 +465,11 @@ def plot_ess_msjd_vs_rho(
     if share_y_metrics:
         _shared_ylim([ax_ess_max, ax_msjd_max])
 
-    fig_max.legend(
-        handles=color_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.65),
-        frameon=False,
-        title="Algorithm",
-    )
-    fig_max.legend(
-        handles=line_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.35),
-        frameon=False,
-        title="Line",
+    _proposal_and_algorithm_legends(
+        fig_max,
+        P_sorted,
+        color_by_P,
+        algorithm_handles,
     )
 
     fig_max.suptitle(fr"{title_prefix}: ESS/MSJD max vs $\rho$")
@@ -533,9 +537,9 @@ def plot_ess_msjd_per_param_vs_rho(
             ]
             ess_x1 = [val / count if count else val for val, count in zip(ess_x1, counts)]
             ess_x2 = [val / count if count else val for val, count in zip(ess_x2, counts)]
-        ax_ess_x1_m.plot(rho_list, ess_x1, marker="o", markersize=3, color=color_by_P[P], label=f"mpCN (P={P})")
+        ax_ess_x1_m.plot(rho_list, ess_x1, marker="o", markersize=3, color=color_by_P[P])
         ax_ess_x2_m.plot(rho_list, ess_x2, marker="o", markersize=3, color=color_by_P[P])
-        ax_ess_x1_x.plot(rho_list, ess_x1, marker="o", markersize=3, color=color_by_P[P], label=f"mpCN (P={P})")
+        ax_ess_x1_x.plot(rho_list, ess_x1, marker="o", markersize=3, color=color_by_P[P])
         ax_ess_x2_x.plot(rho_list, ess_x2, marker="o", markersize=3, color=color_by_P[P])
         ax_msjd_mean_x1.plot(rho_list, msjd_x1, marker="o", markersize=3, color=color_by_P[P])
         ax_msjd_mean_x2.plot(rho_list, msjd_x2, marker="o", markersize=3, color=color_by_P[P])
@@ -585,40 +589,37 @@ def plot_ess_msjd_per_param_vs_rho(
                 ax_ess_x1_m.plot(
                     rho_list,
                     ess_x1_i,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} (P={P})",
                 )
                 ax_ess_x2_m.plot(
                     rho_list,
                     ess_x2_i,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
                 )
                 ax_ess_x1_x.plot(
                     rho_list,
                     ess_x1_i,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} (P={P})",
                 )
                 ax_ess_x2_x.plot(
                     rho_list,
                     ess_x2_i,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
                 )
                 ax_msjd_mean_x1.plot(
                     rho_list,
                     msjd_x1_mean,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} mean (P={P})",
                 )
                 ax_msjd_mean_x2.plot(
                     rho_list,
                     msjd_x2_mean,
-                    linestyle=":",
+                    linestyle="--",
                     color=color_by_P[P],
                 )
                 ax_msjd_max_x1.plot(
@@ -626,7 +627,6 @@ def plot_ess_msjd_per_param_vs_rho(
                     msjd_x1_max,
                     linestyle="--",
                     color=color_by_P[P],
-                    label=f"{independent_label_prefix} max (P={P})",
                 )
                 ax_msjd_max_x2.plot(
                     rho_list,
@@ -667,14 +667,14 @@ def plot_ess_msjd_per_param_vs_rho(
             ]
             pcn_ess_x1 = [val / count if count else val for val, count in zip(pcn_ess_x1, counts)]
             pcn_ess_x2 = [val / count if count else val for val, count in zip(pcn_ess_x2, counts)]
-        ax_ess_x1_m.plot(rho_list, pcn_ess_x1, color="black", marker="o", markersize=3, linestyle="-", label="pCN")
-        ax_ess_x2_m.plot(rho_list, pcn_ess_x2, color="black", marker="o", markersize=3, linestyle="-")
-        ax_ess_x1_x.plot(rho_list, pcn_ess_x1, color="black", marker="o", markersize=3, linestyle="-", label="pCN")
-        ax_ess_x2_x.plot(rho_list, pcn_ess_x2, color="black", marker="o", markersize=3, linestyle="-")
-        ax_msjd_mean_x1.plot(rho_list, pcn_msjd_x1, color="black", marker="o", markersize=3, linestyle="-")
-        ax_msjd_mean_x2.plot(rho_list, pcn_msjd_x2, color="black", marker="o", markersize=3, linestyle="-")
-        ax_msjd_max_x1.plot(rho_list, pcn_msjd_x1, color="black", marker="o", markersize=3, linestyle="-")
-        ax_msjd_max_x2.plot(rho_list, pcn_msjd_x2, color="black", marker="o", markersize=3, linestyle="-")
+        ax_ess_x1_m.plot(rho_list, pcn_ess_x1, color="black", marker="o", markersize=3, linestyle=":")
+        ax_ess_x2_m.plot(rho_list, pcn_ess_x2, color="black", marker="o", markersize=3, linestyle=":")
+        ax_ess_x1_x.plot(rho_list, pcn_ess_x1, color="black", marker="o", markersize=3, linestyle=":")
+        ax_ess_x2_x.plot(rho_list, pcn_ess_x2, color="black", marker="o", markersize=3, linestyle=":")
+        ax_msjd_mean_x1.plot(rho_list, pcn_msjd_x1, color="black", marker="o", markersize=3, linestyle=":")
+        ax_msjd_mean_x2.plot(rho_list, pcn_msjd_x2, color="black", marker="o", markersize=3, linestyle=":")
+        ax_msjd_max_x1.plot(rho_list, pcn_msjd_x1, color="black", marker="o", markersize=3, linestyle=":")
+        ax_msjd_max_x2.plot(rho_list, pcn_msjd_x2, color="black", marker="o", markersize=3, linestyle=":")
         if pcn_scale:
             ax_ess_x1_m.plot(
                 rho_list,
@@ -730,31 +730,20 @@ def plot_ess_msjd_per_param_vs_rho(
         _shared_ylim([ax_ess_x1_x, ax_ess_x2_x])
         _shared_ylim([ax_msjd_max_x1, ax_msjd_max_x2])
 
-    color_handles = [
-        Line2D([0], [0], color=color_by_P[P], linewidth=2, label=f"{method_label} (P={P})")
-        for P in P_sorted
+    algorithm_handles = [
+        Line2D([0], [0], color="black", linestyle="-", linewidth=2, label=method_label),
     ]
     if show_pcn and run_pcn and results.get("pcn"):
-        color_handles.append(Line2D([0], [0], color="black", linewidth=2, label="pCN"))
-    line_handles = [
-        Line2D([0], [0], color="gray", linestyle="-", linewidth=2, label=f"{method_label}/pCN"),
-    ]
+        algorithm_handles.append(Line2D([0], [0], color="black", linestyle=":", linewidth=2, label="pCN"))
     if show_independent and results.get("pcn_independent"):
-        line_handles.append(Line2D([0], [0], color="gray", linestyle="--", linewidth=2, label="independent chains"))
-
-    fig_mean.legend(
-        handles=color_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.65),
-        frameon=False,
-        title="Algorithm",
-    )
-    fig_mean.legend(
-        handles=line_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.35),
-        frameon=False,
-        title="Line",
+        algorithm_handles.append(
+            Line2D([0], [0], color="black", linestyle="--", linewidth=2, label="EP-pCN ($p$-thinned)")
+        )
+    _proposal_and_algorithm_legends(
+        fig_mean,
+        P_sorted,
+        color_by_P,
+        algorithm_handles,
     )
 
     fig_mean.suptitle(fr"{title_prefix}: ESS/MSJD mean per-parameter vs $\rho$")
@@ -765,19 +754,11 @@ def plot_ess_msjd_per_param_vs_rho(
     fig_mean.savefig(reports_dir / file_name_fmt.format(**format_kwargs), bbox_inches="tight")
     plt.show()
 
-    fig_max.legend(
-        handles=color_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.65),
-        frameon=False,
-        title="Algorithm",
-    )
-    fig_max.legend(
-        handles=line_handles,
-        loc="center left",
-        bbox_to_anchor=(1.02, 0.35),
-        frameon=False,
-        title="Line",
+    _proposal_and_algorithm_legends(
+        fig_max,
+        P_sorted,
+        color_by_P,
+        algorithm_handles,
     )
 
     fig_max.suptitle(fr"{title_prefix}: ESS/MSJD max per-parameter vs $\rho$")
@@ -833,15 +814,27 @@ def plot_rejection_vs_rho(
             else np.nan
             for rho in rho_list
         ]
-        ax.plot(rho_list, reject_vals, marker="o", color=color_by_P[P], label=f"{method_label} (P={P})")
+        ax.plot(rho_list, reject_vals, marker="o", color=color_by_P[P])
     if show_pcn and pcn_reject is not None:
-        ax.plot(rho_list, pcn_reject, color="black", marker="s", linestyle="--", label="pCN")
+        ax.plot(rho_list, pcn_reject, color="black", marker="s", linestyle=":")
 
     ax.set_xlabel(r"$\rho$")
     ax.set_ylabel("Rejection rate")
     ax.grid(alpha=0.25)
 
-    _unique_legend(fig, [ax], loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
+    algorithm_handles = [
+        Line2D([0], [0], color="black", linestyle="-", linewidth=2, label=method_label),
+    ]
+    if show_pcn and pcn_reject is not None:
+        algorithm_handles.append(Line2D([0], [0], color="black", linestyle=":", linewidth=2, label="pCN"))
+    _proposal_and_algorithm_legends(
+        fig,
+        P_sorted,
+        color_by_P,
+        algorithm_handles,
+        proposal_anchor=(1.02, 0.6),
+        algorithm_anchor=(1.02, 0.35),
+    )
     fig.suptitle(fr"{title_prefix}: rejection rate vs $\rho$")
     fig.tight_layout()
     format_kwargs = {"seed_base": seed_base}
