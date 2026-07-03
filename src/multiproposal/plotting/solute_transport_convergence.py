@@ -214,6 +214,9 @@ def plot_solute_transport_pub_traceplots(
     max_plot_n: int = 100,
     mpcn_plot_count: int = 50,
     pcn_plot_count: int = 50,
+    mpcn_panel_title: str = "mpCN",
+    pcn_panel_title: str = "pCN",
+    output_tag: str = "mpcn_vs_pcn",
     show: bool = True,
 ):
     """Publication traceplots for mPCN vs pCN observables."""
@@ -292,7 +295,7 @@ def plot_solute_transport_pub_traceplots(
                 alpha=0.35,
             )
         ax_m.plot(mpcn_mean, linewidth=mean_linewidth, color=mean_color)
-        ax_m.set_title("mpCN", fontsize=10)
+        ax_m.set_title(mpcn_panel_title, fontsize=10)
         ax_m.grid(alpha=0.2)
 
         for chain_idx in range(pcn_obs.shape[0]):
@@ -303,7 +306,7 @@ def plot_solute_transport_pub_traceplots(
                 alpha=0.35,
             )
         ax_p.plot(pcn_mean, linewidth=mean_linewidth, color=mean_color)
-        ax_p.set_title("pCN", fontsize=10)
+        ax_p.set_title(pcn_panel_title, fontsize=10)
         ax_p.grid(alpha=0.2)
         ax_p.tick_params(labelleft=False)
 
@@ -328,7 +331,7 @@ def plot_solute_transport_pub_traceplots(
 
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     fig.savefig(
-        reports_dir / f"solute_transport_mpcn_vs_pcn_traceplots_pub_best4observables_rho{rho_tag}.png",
+        reports_dir / f"solute_transport_{output_tag}_traceplots_pub_best4observables_rho{rho_tag}.png",
         bbox_inches="tight",
     )
 
@@ -350,6 +353,9 @@ def plot_solute_transport_pub_traceplots_ep(
     max_plot_n: int = 100,
     mpcn_plot_count: int = 50,
     max_ep_groups: int = 50,
+    mpcn_panel_title: str = "mpCN",
+    ep_panel_title: str = r"Embarrassingly Parallel pCN",
+    output_tag: str = "mpcn_vs_pcn",
     show: bool = True,
 ):
     """Publication traceplots for mPCN vs EP-replicate pCN observables."""
@@ -444,7 +450,7 @@ def plot_solute_transport_pub_traceplots_ep(
                 alpha=0.35,
             )
         ax_m.plot(mpcn_mean, linewidth=mean_linewidth, color=mean_color)
-        ax_m.set_title("mpCN", fontsize=10)
+        ax_m.set_title(mpcn_panel_title, fontsize=10)
         ax_m.grid(alpha=0.2)
 
         for chain_idx in range(pcn_obs_flat.shape[0]):
@@ -455,7 +461,7 @@ def plot_solute_transport_pub_traceplots_ep(
                 alpha=0.2,
             )
         ax_p.plot(pcn_mean, linewidth=mean_linewidth, color=mean_color)
-        ax_p.set_title(r"Embarrassingly Parallel pCN", fontsize=10)
+        ax_p.set_title(ep_panel_title, fontsize=10)
         ax_p.grid(alpha=0.2)
         ax_p.tick_params(labelleft=False)
 
@@ -480,7 +486,7 @@ def plot_solute_transport_pub_traceplots_ep(
 
     fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
     fig.savefig(
-        reports_dir / f"solute_transport_mpcn_vs_pcn_traceplots_pub_ep_replicates_rho{rho_tag}.png",
+        reports_dir / f"solute_transport_{output_tag}_traceplots_pub_ep_replicates_rho{rho_tag}.png",
         bbox_inches="tight",
     )
 
@@ -497,6 +503,10 @@ def plot_solute_transport_running_mse(
     rho_tag: str,
     effective_P: int,
     max_xlim: int = 20,
+    mpcn_label: str = "mPCN",
+    pcn_label: str = "pCN",
+    ep_label: Optional[str] = None,
+    output_tag: str = "mpcn_vs_pcn",
     show: bool = True,
 ):
     """Plot running-MSE curves for selected observables."""
@@ -531,6 +541,9 @@ def plot_solute_transport_running_mse(
         "linewidth": 1.3,
     }
 
+    if ep_label is None:
+        ep_label = f"EP ($p$={effective_P})"
+
     n_obs = len(plot_defs)
     if n_obs < 1:
         raise ValueError("No observables selected for the running-MSE plot.")
@@ -545,10 +558,10 @@ def plot_solute_transport_running_mse(
         row_idx = idx // 2
         col_idx = idx % 2
         ax = axes[row_idx, col_idx]
-        ax.plot(iter_grid, result["mpcn_mse"], label="mPCN", **mpcn_line_kwargs)
-        ax.plot(iter_grid, result["pcn_mse"], label="pCN", **pcn_line_kwargs)
+        ax.plot(iter_grid, result["mpcn_mse"], label=mpcn_label, **mpcn_line_kwargs)
+        ax.plot(iter_grid, result["pcn_mse"], label=pcn_label, **pcn_line_kwargs)
         if result["ep_mse"] is not None:
-            ax.plot(iter_grid, result["ep_mse"], label=f"EP ($p$={effective_P})", **ep_line_kwargs)
+            ax.plot(iter_grid, result["ep_mse"], label=ep_label, **ep_line_kwargs)
         ax.set_title(obs.label, fontsize=10)
         ax.set_ylabel("MSE")
         ax.grid(alpha=0.2)
@@ -565,7 +578,7 @@ def plot_solute_transport_running_mse(
 
     fig.tight_layout()
     fig.savefig(
-        reports_dir / f"solute_transport_mse_timeseries_observables_rho{rho_tag}.png",
+        reports_dir / f"solute_transport_{output_tag}_mse_timeseries_observables_rho{rho_tag}.png",
         bbox_inches="tight",
     )
 
