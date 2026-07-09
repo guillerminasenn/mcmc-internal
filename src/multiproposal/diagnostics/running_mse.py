@@ -28,11 +28,16 @@ def load_chain_slice(path: Path, n_keep: Optional[int]) -> Optional[tuple]:
 
 
 def load_pcn_replicate_chains(
-    rep_dirs: Sequence[Path], pattern: str, n_keep: Optional[int]
+    rep_dirs: Sequence[Path],
+    pattern: str,
+    n_keep: Optional[int],
+    exclude_substrings: Sequence[str] = ("_partial",),
 ) -> List[np.ndarray]:
     chains = []
     for rep_dir in rep_dirs:
         for path in sorted(rep_dir.glob(pattern)):
+            if exclude_substrings and any(substr in path.name for substr in exclude_substrings):
+                continue
             loaded = load_chain_slice(path, n_keep)
             if loaded is None:
                 continue
