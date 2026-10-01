@@ -1,0 +1,95 @@
+=== connected slice: KS vs uniform-on-slice, rounds, evaluations ===
+--- p1 = 0.3  (KS 95% noise level ~ 0.0068)
+murray       KS=0.0021  rounds=  2.70  evals=   2.70
+paper_M1     KS=0.0040  rounds=  2.44  evals=   2.44
+circ_M1      KS=0.0028  rounds=  2.73  evals=   2.73
+paper_M2     KS=0.0060  rounds=  1.65  evals=   3.30
+circ_M2      KS=0.0041  rounds=  1.73  evals=   3.46
+paper_M4     KS=0.0034  rounds=  1.25  evals=   5.01
+circ_M4      KS=0.0032  rounds=  1.26  evals=   5.02
+paper_M8     KS=0.0060  rounds=  1.06  evals=   8.45
+circ_M8      KS=0.0072  rounds=  1.06  evals=   8.45
+paper_M16    KS=0.0054  rounds=  1.00  evals=  16.05
+circ_M16     KS=0.0035  rounds=  1.00  evals=  16.05
+paper_M32    KS=0.0052  rounds=  1.00  evals=  32.00
+circ_M32     KS=0.0046  rounds=  1.00  evals=  32.00
+--- p1 = 0.1  (KS 95% noise level ~ 0.0068)
+murray       KS=0.0038  rounds=  4.69  evals=   4.69
+paper_M1     KS=0.0053  rounds=  4.08  evals=   4.08
+circ_M1      KS=0.0042  rounds=  4.74  evals=   4.74
+paper_M2     KS=0.0031  rounds=  2.62  evals=   5.23
+circ_M2      KS=0.0040  rounds=  2.87  evals=   5.75
+paper_M4     KS=0.0048  rounds=  1.86  evals=   7.46
+circ_M4      KS=0.0033  rounds=  1.92  evals=   7.68
+paper_M8     KS=0.0040  rounds=  1.45  evals=  11.62
+circ_M8      KS=0.0027  rounds=  1.45  evals=  11.60
+paper_M16    KS=0.0035  rounds=  1.18  evals=  18.94
+circ_M16     KS=0.0045  rounds=  1.19  evals=  18.98
+paper_M32    KS=0.0044  rounds=  1.03  evals=  33.10
+circ_M32     KS=0.0053  rounds=  1.04  evals=  33.15
+--- p1 = 0.03  (KS 95% noise level ~ 0.0068)
+murray       KS=0.0032  rounds=  7.03  evals=   7.03
+paper_M1     KS=0.0076  rounds=  6.20  evals=   6.20
+circ_M1      KS=0.0039  rounds=  7.10  evals=   7.10
+paper_M2     KS=0.0048  rounds=  3.87  evals=   7.74
+circ_M2      KS=0.0075  rounds=  4.27  evals=   8.55
+paper_M4     KS=0.0030  rounds=  2.68  evals=  10.72
+circ_M4      KS=0.0052  rounds=  2.79  evals=  11.15
+paper_M8     KS=0.0045  rounds=  2.02  evals=  16.16
+circ_M8      KS=0.0043  rounds=  2.04  evals=  16.31
+paper_M16    KS=0.0021  rounds=  1.64  evals=  26.27
+circ_M16     KS=0.0044  rounds=  1.64  evals=  26.21
+paper_M32    KS=0.0036  rounds=  1.37  evals=  43.98
+circ_M32     KS=0.0065  rounds=  1.38  evals=  44.10
+
+=== two antipodal arcs (fraction q each): P(switch), rounds, evals ===
+--- q = 0.05
+murray       P(sw)=0.1314  rounds=  5.37 evals=   5.37  sw/eval=0.02446 (1.00x ESS)  sw/round=0.0245 (1.00x ESS)
+paper_M1     P(sw)=0.0900  rounds=  4.85 evals=   4.85  sw/eval=0.01853 (0.76x ESS)  sw/round=0.0185 (0.76x ESS)
+circ_M1      P(sw)=0.1317  rounds=  5.42 evals=   5.42  sw/eval=0.02429 (0.99x ESS)  sw/round=0.0243 (0.99x ESS)
+paper_M2     P(sw)=0.1217  rounds=  3.02 evals=   6.03  sw/eval=0.02018 (0.82x ESS)  sw/round=0.0404 (1.65x ESS)
+circ_M2      P(sw)=0.1456  rounds=  3.26 evals=   6.51  sw/eval=0.02234 (0.91x ESS)  sw/round=0.0447 (1.83x ESS)
+paper_M4     P(sw)=0.1800  rounds=  2.04 evals=   8.15  sw/eval=0.02210 (0.90x ESS)  sw/round=0.0884 (3.61x ESS)
+circ_M4      P(sw)=0.1862  rounds=  2.11 evals=   8.43  sw/eval=0.02209 (0.90x ESS)  sw/round=0.0883 (3.61x ESS)
+paper_M8     P(sw)=0.2821  rounds=  1.50 evals=  12.01  sw/eval=0.02349 (0.96x ESS)  sw/round=0.1879 (7.68x ESS)
+circ_M8      P(sw)=0.2879  rounds=  1.50 evals=  11.98  sw/eval=0.02403 (0.98x ESS)  sw/round=0.1922 (7.86x ESS)
+paper_M16    P(sw)=0.4023  rounds=  1.19 evals=  19.00  sw/eval=0.02118 (0.87x ESS)  sw/round=0.3388 (13.85x ESS)
+circ_M16     P(sw)=0.4016  rounds=  1.19 evals=  19.00  sw/eval=0.02114 (0.86x ESS)  sw/round=0.3382 (13.83x ESS)
+paper_M32    P(sw)=0.4848  rounds=  1.03 evals=  33.12  sw/eval=0.01464 (0.60x ESS)  sw/round=0.4685 (19.15x ESS)
+circ_M32     P(sw)=0.4822  rounds=  1.04 evals=  33.14  sw/eval=0.01455 (0.59x ESS)  sw/round=0.4657 (19.04x ESS)
+paper_M64    P(sw)=0.4987  rounds=  1.00 evals=  64.08  sw/eval=0.00778 (0.32x ESS)  sw/round=0.4981 (20.36x ESS)
+circ_M64     P(sw)=0.4991  rounds=  1.00 evals=  64.08  sw/eval=0.00779 (0.32x ESS)  sw/round=0.4985 (20.38x ESS)
+--- q = 0.01
+murray       P(sw)=0.0301  rounds=  8.99 evals=   8.99  sw/eval=0.00335 (1.00x ESS)  sw/round=0.0033 (1.00x ESS)
+paper_M1     P(sw)=0.0197  rounds=  8.16 evals=   8.16  sw/eval=0.00241 (0.72x ESS)  sw/round=0.0024 (0.72x ESS)
+circ_M1      P(sw)=0.0296  rounds=  9.04 evals=   9.04  sw/eval=0.00327 (0.98x ESS)  sw/round=0.0033 (0.98x ESS)
+paper_M2     P(sw)=0.0278  rounds=  5.02 evals=  10.03  sw/eval=0.00277 (0.83x ESS)  sw/round=0.0055 (1.65x ESS)
+circ_M2      P(sw)=0.0334  rounds=  5.41 evals=  10.83  sw/eval=0.00309 (0.92x ESS)  sw/round=0.0062 (1.84x ESS)
+paper_M4     P(sw)=0.0426  rounds=  3.37 evals=  13.50  sw/eval=0.00315 (0.94x ESS)  sw/round=0.0126 (3.77x ESS)
+circ_M4      P(sw)=0.0413  rounds=  3.52 evals=  14.10  sw/eval=0.00293 (0.88x ESS)  sw/round=0.0117 (3.50x ESS)
+paper_M8     P(sw)=0.0761  rounds=  2.45 evals=  19.61  sw/eval=0.00388 (1.16x ESS)  sw/round=0.0311 (9.28x ESS)
+circ_M8      P(sw)=0.0765  rounds=  2.49 evals=  19.92  sw/eval=0.00384 (1.15x ESS)  sw/round=0.0307 (9.17x ESS)
+paper_M16    P(sw)=0.1386  rounds=  1.89 evals=  30.17  sw/eval=0.00459 (1.37x ESS)  sw/round=0.0735 (21.94x ESS)
+circ_M16     P(sw)=0.1406  rounds=  1.90 evals=  30.32  sw/eval=0.00464 (1.38x ESS)  sw/round=0.0742 (22.15x ESS)
+paper_M32    P(sw)=0.2355  rounds=  1.54 evals=  49.15  sw/eval=0.00479 (1.43x ESS)  sw/round=0.1533 (45.79x ESS)
+circ_M32     P(sw)=0.2392  rounds=  1.54 evals=  49.14  sw/eval=0.00487 (1.45x ESS)  sw/round=0.1558 (46.50x ESS)
+paper_M64    P(sw)=0.3649  rounds=  1.28 evals=  81.64  sw/eval=0.00447 (1.33x ESS)  sw/round=0.2860 (85.40x ESS)
+circ_M64     P(sw)=0.3684  rounds=  1.27 evals=  81.43  sw/eval=0.00452 (1.35x ESS)  sw/round=0.2896 (86.47x ESS)
+
+=== fixed connected arc: lag-1 autocorrelation of position (n=40000, seed 1) ===
+--- p1 = 0.3  (noise level ~ 0.0050)
+murray       rho1=+0.0056
+paper_M1     rho1=+0.0976
+circ_M1      rho1=+0.0021
+paper_M2     rho1=+0.0627
+circ_M2      rho1=+0.0028
+paper_M4     rho1=+0.0351
+circ_M4      rho1=-0.0006
+--- p1 = 0.1  (noise level ~ 0.0050)
+murray       rho1=-0.0008
+paper_M1     rho1=+0.0459
+circ_M1      rho1=-0.0059
+paper_M2     rho1=+0.0374
+circ_M2      rho1=+0.0071
+paper_M4     rho1=+0.0299
+circ_M4      rho1=+0.0030

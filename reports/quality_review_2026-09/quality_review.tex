@@ -1,0 +1,472 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+\emergencystretch=3em
+
+\lstset{basicstyle=\ttfamily\small, columns=fullflexible, keepspaces=true,
+        frame=single, framerule=0.2pt, breaklines=true, language=Python,
+        commentstyle=\color{gray}}
+
+\newtheorem{claim}{Claim}
+\newtheorem{obs}{Observation}
+\theoremstyle{remark}
+\newtheorem{rem}{Remark}
+
+\usepackage{url}
+\DeclareUrlCommand\code{\urlstyle{tt}}
+\newcommand{\todo}[1]{\textcolor{red!70!black}{[#1]}}
+\newcommand{\bx}{\bm{x}}
+\newcommand{\bnu}{\bm{\nu}}
+\usepackage{bm}
+
+\title{MESS / \code{mcmc} workspace: quality review, manuscript critique and improvement plan}
+\author{Prepared for G.~Senn}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent This report reviews the four repositories in the \code{mcmc} workspace (\code{mcmc-internal}, \code{mess-internal}, \code{mess}, \code{mess-jcgs}). It covers (i) repository organisation, (ii) code quality and correctness, (iii) a review of the MESS manuscript (arXiv:2602.22358) and the UAI reviews, (iv) an analysis of when MESS is actually useful, (v) a literature review, (vi) a numerical-experiment plan, and (vii) a prioritised action plan. The single most consequential finding is a labelling bug in the LP-based acceptance step (present in all three copies of \code{mess.py}) that makes the ``angular'' and ``Euclidean'' MESS variants distributionally identical to uniform MESS; every LP result reported so far therefore measures Monte Carlo noise plus solver overhead. The second is theoretical: on a connected slice, ESS with Murray et al.'s bracket already returns an exact independent draw from the slice, so $M>1$ cannot improve the per-iteration law; the gain of MESS is a reduction of \emph{sequential depth} that is logarithmic in $M$. Combined with a careful reading of Pozza--Zanella (2024) this implies that, at stationarity, $M$ independent ESS chains dominate MESS by a factor $\approx M/\log_2(M+1)$ on a connected slice, and that MESS can win only on mode switching across a disconnected slice (by a factor bounded by the ratio of sequential depths; $\approx1.4$ in a two-arc toy) or in the transient phase. A by-product of reviewing the invariance proof is that the paper's modified ESS (bracket cut at the random angle $\alpha$) is \emph{not} equivalent in law to Murray's ESS: it is reversible with respect to the uniform law on a connected slice but not an independent draw from it (lag-one autocorrelation $\approx0.1$ in a toy), and it switches arcs $\approx25\%$ less often. The invariance proof in the supplement is correct; the doubly-stochastic condition is exactly what is needed, reversibility is neither needed nor claimed, and (contrary to my first draft) the non-symmetric LP matrix is provably harmless for asymptotic variance. Typos, an involution argument for bijectivity and an alternative proof are given.
+\end{abstract}
+
+\tableofcontents
+
+%======================================================================
+\section{Executive summary}
+%======================================================================
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Bug (high impact).} In the LP branch of \code{mess_step}, the row of the transition matrix is indexed in \emph{sorted-angle} order but is applied to the valid proposals in \emph{original-index} order (\code{rng.choice(A, p=row_P1)}). The map $h^{-1}$ of the paper is not implemented. Because proposal labels are an i.i.d.\ (hence uniformly random) permutation of the sorted order, the marginal selection law is exactly uniform. Verified numerically (Section~\ref{sec:lpbug}). Consequences: (a) the paper's Uniform/Angular/Euclidean comparisons are not informative; (b) the LP variants have never actually been tested; (c) the chain is still a valid uniform-MESS chain, so no reported \emph{posterior} is wrong.
+\item \textbf{Theory (high impact).} With Murray et al.'s bracket (anchored at the first rejected angle) the accepted angle on a connected slice is an \emph{exact independent uniform draw} from the slice for every $M$, so $M>1$ cannot change the per-iteration law; MESS changes it only on disconnected slices (converging, as $M\to\infty$, to the ideal slice sampler on the ellipse). The computational gain is the reduction of sequential rounds from $N_1\approx\log_2(1/p_1)+c$ to $R_M\approx\log_{M+1}(1/p_1)+c$. Pozza--Zanella (2024) prove, for \emph{reversible} fixed-$K$ multiproposal chains, that $K$ proposals buy at most a factor $K$ in spectral gap, and (via Peskun) $\sigma^2_K(f)\ge\sigma^2_1(f)/K-(1-1/K)\mathrm{Var}_\pi f$ in asymptotic variance -- so $K$ independent chains, which achieve $\sigma^2_1/K$ exactly, cannot be beaten by more than a negligible additive term. MESS is not literally in their framework (adaptive, random number of proposals), but a direct argument gives the same verdict on connected slices: EP-ESS wins by $MR_M/N_1\approx M/\log_2(M+1)$ in both the serial and the $M$-processor cost model. On disconnected slices MESS can beat EP-ESS on mode switching by a factor bounded by roughly $N_1/R_M$ (toy: $\times1.4$ at arc fraction $0.01$). The paper's value proposition must therefore be (i) the transient/burn-in phase, where independent chains do not help (Amdahl), (ii) settings where independent chains are unavailable (ESS blocks inside Gibbs) or $M$ evaluations cost about one (batched/GPU likelihoods), (iii) within-chain mode switching on disconnected slices (Section~\ref{sec:useful}).
+\item \textbf{Modified ESS is not Murray's ESS.} The paper cuts the initial bracket at angle $0$, a uniform random point that is \emph{not} a rejected proposal (Murray et al.\ cut at the first rejected angle). The proof covers this, and the chain is reversible, but the per-iteration law differs: on a connected slice the paper's ESS is not an independent draw (toy: lag-one autocorrelation $0.10$ at $p_1=0.3$, $0.05$ at $p_1=0.1$; Murray's: $0$), it uses $\approx12\%$ fewer rounds, and it switches arcs $\approx25\%$ less often. The paper should say this (Section~\ref{sec:proofreview}).
+\item \textbf{Organisation.} Three copies of the algorithmic core exist with 16 byte-identical and several drifted duplicates, a \code{sys.path} hack couples \code{mess-internal} to \code{mcmc-internal}, none of the \code{mess*} packages is \code{pip}-installable (empty \code{pyproject.toml}), \code{cvxpy} is not declared in \code{mess}, and both \code{.venv} directories are empty shells. Recommendation: one source-of-truth package in \code{mcmc-internal}, experiments as consumers, public \code{mess} generated by an export script; no nested repositories or submodules (Section~\ref{sec:org}).
+\item \textbf{Manuscript / proof.} The invariance proof (main text Sec.~3.2, Supplement Apps.~A--C) is correct: $T$ is an involution, the Jacobian is one, the support and the bracket widths are preserved, and the row/column sums give exactly what is needed. I list eight typos and label errors in the supplement, three points that should be stated explicitly (involution, block-triangular Jacobian, permutation-invariance of $P$), an alternative shorter proof, and a two-line ergodicity argument via Natarovskii et al.\ (Section~\ref{sec:proofreview}). Claims about dimension-freeness and about the LP variants need to be softened or removed.
+\item \textbf{Reversibility is not the goal; I withdraw my first-draft recommendation to symmetrise $P$.} The paper never claims reversibility and does not need it. For MESS the $\bx$-chain with matrix $P$ has adjoint equal to the chain with $P^\top$, so it is reversible iff $K_P=K_{P^\top}$ (symmetric $P$ suffices; every circulant $P$ also suffices, by a reflection argument). More importantly, by Bierkens (2016) the non-reversible chain with $P$ has asymptotic variance no larger than the reversible chain with $(P+P^\top)/2$ for every $f\in L^2(\pi)$: symmetrising can only hurt. The only price of non-reversibility is diagnostic (Geyer's initial-sequence estimator is not justified; use batch means/spectral estimators). Because $\bnu$ and $\alpha$ are refreshed every iteration there is no persistent direction, so lifting-type gains are not available either (Section~\ref{sec:circulant}).
+\item \textbf{Circulant $P$: what it buys.} A convex combination of cyclic shifts of the sorted angles is a zero-diagonal doubly-stochastic matrix computable in $O(B)$ with no solver and no $\lambda$; it reproduces the intent of the LP (whose $\lambda\to0$ limit is an assignment problem, i.e.\ a derangement close to the antipodal shift) and yields a reversible $\bx$-chain for \emph{any} weights. The gain is computational and diagnostic, not statistical: distance-informed selection is a within-slice over-relaxation whose sign depends on the functional (antithetic for odd, adverse for even functionals), and it should be tested cheaply before more LP engineering (Section~\ref{sec:circulant}).
+\end{enumerate}
+
+%======================================================================
+\section{Repository organisation}\label{sec:org}
+%======================================================================
+\subsection{Current state}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Four independent git repositories} at the workspace root (not nested): \code{mcmc-internal} (package \code{multiproposal}: ESS, MESS, pCN, mpCN, MT-pCN, aMPCN, MH, problems, diagnostics, plotting), \code{mess-internal} (package \code{mess}: ESS/MESS + problems + a large \code{experiments/} tree), \code{mess} (public, package \code{mess}), \code{mess-jcgs} (manuscript).
+\item \textbf{Duplication.}
+  \begin{itemize}
+  \item Byte-identical in all three code repos: \code{algorithms/mh.py}, \code{algorithms/utils.py}, \code{problems/base.py}, \code{problems/gp_regression.py}, \code{problems/logistic_regression.py}, \code{problems/sbd.py}, \code{data/logistic_regression.py}, \code{data/sbd.py}.
+  \item Identical between \code{mess} and \code{mess-internal}: \code{effective_sample_size.py}, \code{ess.py}, \code{data/gp_regression.py}, \code{kernels/stationary.py}, \code{plotting/diagnostics.py}.
+  \item Drifted: \code{mess.py} (three versions: \code{return_trace} only in \code{mess-internal}; \code{euclidean_squared} only in \code{mcmc-internal}); \code{effective_sample_size.py} (\code{mcmc-internal} adds MSJD); \code{plotting/diagnostics.py}; the advection--diffusion problem renamed to ``solute transport'' in \code{mess-internal} only.
+  \end{itemize}
+\item \textbf{Coupling hack.} \code{mess-internal/src/mess/experiments/common/run_layout.py} inserts \code{../mcmc-internal/src} into \code{sys.path} so experiment scripts can import \code{multiproposal.algorithms.mpcn}. This is a hidden dependency on a sibling checkout.
+\item \textbf{Packaging.} \code{mess/pyproject.toml} and \code{mess-internal/pyproject.toml} contain only a \code{[build-system]} table (no \code{[project]}), so neither is installable; \code{mess/requirements.txt} is empty (the public repo does not declare \code{numpy}, \code{scipy}, \code{cvxpy}); \code{mess/environment.yml} is an unrelated \code{bpwave2-env} dump. The only environment with the dependencies is the conda env \code{mess-env}. Both \code{.venv} folders contain no scientific packages.
+\item \textbf{Tests.} One test file (\code{mess-internal/tests/test_narrowband_source_localization.py}). No test touches the samplers.
+\item \textbf{Chain loop} for MESS (\code{for t: x,_,_ = mess_step(...)}) is re-implemented in every \code{experiments/*/run_chains.py}; there is no \code{mess_chain()}.
+\end{itemize}
+
+\subsection{Recommendation: one source of truth, consumers, and an export step}
+Your stated goals are efficiency, code economy, simplicity and clarity, with three constraints: (a) a change to an algorithm should propagate everywhere after merging to \code{main}; (b) the public \code{mess} is updated only when changes are ``here to stay''; (c) MESS and a forthcoming algorithm are developed by you while pCN/mpCN/etc.\ are baselines.
+
+\paragraph{Do not nest repositories or use submodules.} Nested repos/submodules add a second layer of version pinning that you would have to update by hand; that is exactly the friction you want to remove. Instead:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{\code{mcmc-internal} becomes the only place where algorithm code lives} (it already contains a superset). Keep the package name \code{multiproposal} (or rename once to something neutral such as \code{gpmcmc}; renaming is cheap now and expensive later). Layout:
+\begin{verbatim}
+mcmc-internal/
+  src/multiproposal/
+    algorithms/  ess.py mess.py pcn.py mpcn.py mtpcn.py ampcn.py mh.py
+                 newalg.py  transition.py (uniform/circulant/LP)  chains.py
+    problems/    base.py gp_regression.py logistic_regression.py sbd.py
+                 advection_diffusion.py polar_twist.py narrowband.py
+    data/  kernels/  diagnostics/  plotting/
+  experiments/   <- from mess-internal/src/mess/experiments
+  tests/
+  scripts/export_public_mess.py
+\end{verbatim}
+\item \textbf{\code{mess-internal} is retired or reduced to experiments.} Its algorithm files are duplicates; its unique content is the experiment tree, \code{polar_twist}, \code{narrowband_source_localization}, and instructions. Move those into \code{mcmc-internal} (option A, simplest: one repo, one environment, one \code{git log}) or keep \code{mess-internal} as an experiments-only repo that depends on \code{multiproposal} via \code{pip install -e ../mcmc-internal} (option B). Option A is recommended; the ``development of MESS'' then happens on branches (\code{dev/mess-*}) of \code{mcmc-internal}, not in a separate repo.
+\item \textbf{Public \code{mess} is a generated artefact}, not a hand-maintained fork. Add \code{scripts/export_public_mess.py} that copies a whitelist (\code{algorithms/ess.py}, \code{mess.py}, \code{transition.py}, \code{utils.py}, \code{chains.py}, selected problems/data/kernels, ESS estimator, a README) into a checkout of \code{mess}, rewriting \code{multiproposal.} $\to$ \code{mess.} in imports, and runs the public test-suite there. You run it when you tag a release (\code{git tag mess-v0.2}). A CI job in \code{mcmc-internal} can run the export into a temp dir and \code{diff} it against the public repo to warn about drift. The forthcoming algorithm gets the same treatment when it is ready.
+\item \textbf{Branching.} \code{main} is always runnable; feature branches \code{dev/mess-circulant}, \code{dev/newalg}; merge via PR to \code{main}; tags for paper snapshots (\code{jcgs-submission-1}) so every figure is reproducible from a commit hash.
+\item \textbf{Packaging.} A single \code{pyproject.toml} with \code{[project]} metadata and \code{dependencies = ["numpy", "scipy", "matplotlib"]} and \code{[project.optional-dependencies] lp = ["cvxpy", "highspy"]}; \code{cvxpy} becomes optional and imported lazily inside the LP branch. Delete the two empty \code{.venv} shells and the unrelated \code{environment.yml} in \code{mess}; keep one \code{environment.yml} generated from \code{mess-env}.
+\item \textbf{Manuscript repo} stays as is (\code{mess-jcgs}), consuming only figures/tables written by \code{mcmc-internal/experiments/*}, as your handoff note already prescribes.
+\end{enumerate}
+
+%======================================================================
+\section{Code quality}\label{sec:code}
+%======================================================================
+\subsection{The LP labelling bug}\label{sec:lpbug}
+Location (identical in all three copies): \code{mess-internal/src/mess/algorithms/mess.py} lines 150--188, \code{mess/src/mess/algorithms/mess.py} line 159, \code{mcmc-internal/src/multiproposal/algorithms/mess.py} line 163.
+\begin{lstlisting}
+psi        = np.concatenate([phi_vector[A], [alpha]])   # index order
+psi_sorted = np.sort(psi)                               # angle order
+D          = ...(psi_sorted)...                         # rows/cols in angle order
+P1         = solve_transition_lp(D, P0, lam)            # rows/cols in angle order
+current_index = np.where(psi_sorted == alpha)[0][0]
+row_P1 = np.delete(P1[current_index, :], current_index) # angle order (minus alpha)
+i = rng.choice(A, p=row_P1)                             # BUG: A is in index order
+\end{lstlisting}
+\code{row_P1[k]} is the probability of moving to the $k$-th smallest valid angle, but it is assigned to \code{A[k]}, the $k$-th valid proposal in the order in which proposals were drawn. Since \code{phi_vector} is i.i.d.\ uniform, the drawing order is a uniformly random permutation of the angle order, independent of the angle values, so the marginal law of the selected angle is uniform on the valid set.
+
+\paragraph{Numerical confirmation} (run with the repo's own \code{solve_transition_lp}, HiGHS, $\lambda=0.1$): valid angles $\{5.5, 0.4, 3.2, 1.0\}$ (index order), $\alpha=3.0$. The LP row over the sorted angles $(0.4,1.0,3.2,5.5)$ is $(0.25,0.25,0,0.5)$ -- it correctly wants to move to the far angle $5.5$ with probability $0.5$ and never to the nearby $3.2$. The implemented code assigns $0.5$ to angle $1.0$ and $0$ to angle $3.2$. Averaged over $20{,}000$ random relabellings of the same angle set, the implemented selection frequencies of the four sorted angles are $(0.250, 0.253, 0.248, 0.248)$: uniform.
+
+\paragraph{Fix.}
+\begin{lstlisting}
+order  = np.argsort(psi)                 # psi index of each sorted entry
+cur    = np.where(order == len(A))[0][0] # alpha was appended last
+row    = np.delete(P1[cur], cur)
+labels = np.delete(order, cur)           # h^{-1}: sorted position -> psi index
+i      = A[rng.choice(labels, p=row)]
+\end{lstlisting}
+Add a unit test that constructs a permutation matrix $P_1$ and checks that the selected angle is the one prescribed by the sorted order (Section~\ref{sec:tests}).
+
+\paragraph{Implications.} All LP-variant results (paper Tables on GP regression a01/a02, logistic regression, Fig.~6-type comparisons, the \code{polar_twist_distance_comparison} experiment) must be re-run after the fix. The LP variants have effectively never been evaluated. On the positive side, all chains produced so far are valid uniform-MESS chains.
+
+\subsection{Other correctness / robustness issues}
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Non-reversibility of LP-MESS is harmless but must be known to the diagnostics.} The LP constrains $P$ to be doubly stochastic with zero diagonal but not symmetric; the paper (correctly) proves invariance only and never claims reversibility. By Section~\ref{sec:circulant} the chain with $P$ is at least as good in asymptotic variance as the chain with $(P+P^\top)/2$, so there is no statistical reason to symmetrise. There is a diagnostic reason to be careful: the ESS estimator in \code{effective_sample_size.py} (Geyer's initial positive sequence) is justified only for reversible chains. Either use it only for uniform/circulant $P$, or switch to batch-means/spectral estimators (Flegal \& Jones 2010) that are valid for any ergodic chain.
+\item \textbf{$P_0$ is mutated in place} (\code{np.fill_diagonal(P0, 0)}) when supplied by the caller.
+\item \textbf{Warm start of the LP is not a warm start.} \code{P0} defaults to the uniform matrix at every step; the $\ell_1$ penalty $\lambda\|P-P_0\|_1$ therefore shrinks towards uniform, not towards the previous iteration's matrix (which has a different size $B$ anyway). Either drop the penalty or document it as ``regularisation towards uniform''. With $\lambda\to0$ the LP optimum is a vertex of the zero-diagonal Birkhoff polytope, i.e.\ a permutation matrix (a deterministic derangement), which would make the accepted angle deterministic given the proposal set.
+\item \textbf{Euclidean branch recomputes all proposals} (\code{x_psi_sorted}) that were already computed for the likelihood check; cache them.
+\item \textbf{mpCN} recomputes $\log L(\bx)$ every step although it is known from the previous step; \code{mpcn_chain} has four near-identical branches (parallel/serial $\times$ diagnostics/no diagnostics) that should be one loop with an optional executor.
+\item \textbf{MT-pCN acceptance detection} uses \code{not np.allclose(x_new, x)}; return an explicit flag from the step function.
+\item \textbf{ESS estimator.} Pure-Python $O(N\cdot\text{max\_lag})$ loop; \code{max_lag = min(N/5, 1000)} silently truncates the autocorrelation sum, which overestimates ESS for sticky chains (relevant for high-dimensional MH baselines in the dimension sweep, making MH look better than it is); the monotone-sequence step of Geyer's estimator is commented out; a \code{print} lives in library code. Replace with an FFT autocovariance plus Geyer IPS (or call \code{arviz.ess}), and validate against \code{arviz} on an AR(1) chain with known ESS.
+\item \textbf{Floating-point equality} \code{np.where(psi_sorted == alpha)} works only because \code{alpha} is copied unchanged into \code{psi}; the \code{argsort}-based fix above removes the fragility.
+\item \textbf{Bracket edge case.} The bracket is $(0,2\pi]$ with $\alpha\sim U(0,2\pi)$ and proposals compared to $\alpha$ with \code{<} / \code{>=}; a proposal equal to $\alpha$ has probability zero, fine, but the code should assert \code{phi_min < phi_max} to catch infinite loops if a likelihood returns \code{nan} (\code{nan > logy} is \code{False} for all proposals, so the bracket keeps shrinking towards $\alpha$ forever). Guard with a max-rounds argument and a clear error.
+\end{enumerate}
+
+\subsection{Efficiency}
+\begin{itemize}[leftmargin=*]
+\item \textbf{LP per accepted step.} A \code{cvxpy} problem construction plus HiGHS solve costs milliseconds even for $B\le 10$; for cheap likelihoods this dominates wall-clock (the paper's ``$O(B^2)$'' statement describes the size of the problem, not the cost). Section~\ref{sec:circulant} gives an $O(B)$ closed-form family that makes the LP unnecessary for the purpose of favouring far angles.
+\item \textbf{Vectorise the proposal computation.} \code{mean + cos(phi-alpha)*x_c + sin(phi-alpha)*nu_c} is already vectorised; the likelihood loop over $M$ proposals is serial in \code{mess_step}. Add an optional \code{log_likelihood_batch} on \code{GaussianPriorProblem} (default: loop) so that vectorised forward models (advection--diffusion, GP classification) evaluate all $M$ proposals in one call; this is also how you get an honest ``parallel'' timing on one machine without \code{concurrent.futures} overhead.
+\item \textbf{Prior sampling} via \code{L @ z} each step is fine; for the KL/PDE problems consider storing $L$ once per problem (already done in \code{base.py}).
+\end{itemize}
+
+\subsection{Missing tests}\label{sec:tests}
+Minimal suite (\code{pytest}, seconds to run):
+\begin{enumerate}[leftmargin=*]
+\item \emph{Label mapping}: fixed angles, permutation $P_1$, assert selected index.
+\item \emph{Invariance}: Gaussian likelihood $\times$ Gaussian prior in $d=3$ (posterior known in closed form); run ESS, MESS uniform ($M=1,4$), MESS circulant/LP-fixed; check posterior mean and covariance within Monte Carlo error; the same for pCN/mpCN/MT-pCN.
+\item \emph{Doubly-stochastic / symmetric}: row and column sums of every transition matrix; symmetry when requested.
+\item \emph{Invariance on a connected slice}: 1-D likelihood with a single arc, run the angle procedure as a Markov chain on the arc; the marginal law must be uniform on the arc for every $M$ and every doubly-stochastic $P$ (KS test). Record the lag-one autocorrelation as well: it must be $0$ with Murray's bracket and is positive with the paper's $\alpha$-cut (Claim~\ref{cl:connected}; the script \code{toy_circle_sim.py} in this directory does exactly this).
+\item \emph{ESS estimator}: AR(1) with known integrated autocorrelation time.
+\end{enumerate}
+
+\subsection{Transition matrix: reversibility, non-reversibility, and a cheap circulant family}\label{sec:circulant}
+
+\paragraph{What the choice of $P$ can and cannot do.}
+Write $K_P$ for the $\bx$-chain kernel of MESS with selection matrix $P(\cdot)$ (a function of the sorted valid angles). The involution proof of the paper shows more than invariance: the forward density carries $P_{h(\alpha),h(\varphi_{km})}$ and the reverse density the transposed entry, with identical remaining factors. Integrating out $(\bnu,y,\alpha,\bm\varphi)$ therefore gives
+\begin{equation}\label{eq:adjoint}
+\pi(\bx)K_P(\bx,\mathrm d\bx')=\pi(\bx')K_{P^\top}(\bx',\mathrm d\bx),\qquad\text{i.e.}\qquad K_P^{*}=K_{P^\top},
+\end{equation}
+where $^{*}$ is the $L^2(\pi)$ adjoint. Consequences:
+\begin{enumerate}[leftmargin=*]
+\item $K_P$ is reversible iff $K_P=K_{P^\top}$. Symmetric $P$ is sufficient (uniform $P$ in particular).
+\item \emph{Reflection.} The map $J:(\bnu,\alpha,\varphi_{ij})\mapsto(2\bm\mu-\bnu,\,2\pi-\alpha,\,2\pi-\varphi_{ij})$ leaves $\mathcal N(\bnu)$, the uniform laws and the proposal points $\bx\cos(\varphi-\alpha)+\bnu\sin(\varphi-\alpha)$ unchanged, mirrors the brackets ($\ell\leftrightarrow2\pi-r$) and reverses the sorted order. Hence $K_P=K_{\bar P}$ with $\bar P_{rs}=P_{B+1-r,B+1-s}$ whenever $P$ is reflection-covariant (true for the angular and Euclidean LPs, whose distance matrices are reflection-invariant, and for any rank-based rule). So $K_P$ is reversible as soon as $P^\top=\bar P$ (\emph{persymmetric} $P$), a strictly weaker condition than symmetry.
+\item \emph{Non-reversibility never hurts here.} Since $K_P$ is $\pi$-invariant with adjoint $K_{P^\top}$, its additive symmetrisation is $K_{(P+P^\top)/2}$ (the kernel is affine in $P$). Bierkens (2016; ``a non-reversible chain has asymptotic variance no larger than its additive symmetrisation''; finite-state version in Sun, Gomez \& Schmidhuber 2010) gives
+\[
+\sigma^2\big(f,K_P\big)\;\le\;\sigma^2\big(f,K_{(P+P^\top)/2}\big)\qquad\forall f\in L^2_0(\pi),
+\]
+whenever the symmetrised chain has a spectral gap. Adding a symmetry constraint to the LP can therefore only increase asymptotic variance (and, since the LP objective and constraints are transposition-invariant, a symmetric optimum always exists with the \emph{same} objective value, so the LP's own criterion cannot distinguish them). I withdraw my first-draft recommendation to symmetrise.
+\item \emph{But no lifting-type gain either.} The mechanisms by which non-reversible chains beat reversible ones by more than a constant (Diaconis, Holmes \& Neal 2000; Chen, Lov\'asz \& Pak 1999; Andrieu \& Livingstone 2021) need a direction variable that persists across iterations. In MESS the direction ($\bnu$) and the parametrisation ($\alpha$) are refreshed at every iteration, so the asymmetry of $P$ acts within one iteration only. Do not expect more from the LP than a within-slice over-relaxation. Its effect on autocorrelation is functional-dependent: with $L\equiv$ const (slice $=$ whole ellipse), uniform selection gives independent draws, whereas ``far'' selection ($\theta\approx\pi$) gives $\bx'\approx-\bx$: antithetic for odd $f$, adverse ($\rho\approx+1$) for even $f$ such as second moments. This is Neal's over-relaxation trade-off and it explains why one should expect small, sign-indefinite effects from distance-informed $P$.
+\end{enumerate}
+
+\paragraph{The circulant family.}
+Let $C$ be the cyclic shift on the $B$ sorted positions ($C_{r,s}=1$ iff $s\equiv r+1\bmod B$). For weights $w_1,\dots,w_{B-1}\ge0$, $\sum_kw_k=1$,
+\[
+P=\sum_{k=1}^{B-1}w_kC^k
+\]
+is doubly stochastic with zero diagonal. Every circulant is persymmetric ($\bar P_{rs}=w_{(r-s)\bmod B}=P_{sr}$), so by item~2 \emph{every} circulant $P$ gives a reversible $\bx$-chain -- not only palindromic weights as my first draft said (palindromic weights make $P$ symmetric, which is sufficient but not necessary). Choosing $w_k$ increasing in the cyclic rank distance $\min(k,B-k)$ favours far angles in rank; $w_k\equiv1/(B-1)$ is uniform; $w$ concentrated at $k=\lfloor B/2\rfloor$ is a rank-based over-relaxed move. Cost $O(B)$, no solver, no $\lambda$, no \code{cvxpy}.
+
+\paragraph{What is gained, honestly.} Not statistical efficiency by itself (item~4 above). The gains are: (a) removing a millisecond-scale solver call per accepted step, which dominates wall-clock for cheap likelihoods; (b) reproducing the LP's intent in closed form -- with $\lambda\to0$ the LP is the assignment problem $\max\sum_{rs}d_{rs}P_{rs}$ over zero-diagonal doubly-stochastic matrices, whose optimum is a permutation (a derangement) that for angular distance is essentially the antipodal cyclic shift, i.e.\ a member of the circulant family; (c) a controlled knob (sharpness of $w$) to test the hypothesis ``far-favouring selection helps'' in E4 before investing in LP machinery; (d) reversibility for free, which keeps Geyer-type ESS estimators valid. If actual angular or Euclidean distances are wanted rather than ranks, Sinkhorn-balance a symmetric seed matrix (a few $O(B^2)$ iterations).
+
+%======================================================================
+\section{Manuscript review (arXiv:2602.22358)}\label{sec:paper}
+%======================================================================
+\subsection{Detailed review of the invariance proof}\label{sec:proofreview}
+Sources: main text Sec.~3.2 (support $\mathcal F$, transformation $T$, Lemmas ``invariance of support'' and ``ordering and flipping'', joint densities, the final summation) and Supplement Apps.~A--C (\code{uai_supplementary_body.tex}). I read the three appendices line by line.
+
+\paragraph{Structure of the argument.} (1) The forward path $(\bx,\bm\phi,m)$, $\bm\phi=(\bnu,y,\alpha,k,\bm\varphi_{1:k})$, has density $g\cdot P_{h(\alpha),h(\varphi_{km})}\cdot\mathbb I_{\mathcal F}$ with $g\propto\mathcal N(\bx)\mathcal N(\bnu)\,(2\pi)^{-1}\prod_{i\le k}\prod_{j\le M}(r_{i-1}-\ell_{i-1})^{-1}$. (2) $T$ swaps $\alpha\leftrightarrow\varphi_{km}$, rotates $(\bx,\bnu)$ by $\varphi_{km}-\alpha$, keeps everything else. (3) App.~A: $T^{-1}$ maps $\mathcal F$ into $\mathcal F$ (the constraints (a)--(h) on the pre-image are equivalent to the constraints (i)--(vi) on the image). (4) App.~B: ordering of brackets, and the ``flipping'' identity $\ell_i(\alpha,\cdot)=\ell_i(\varphi_{km},\cdot)$, $r_i(\alpha,\cdot)=r_i(\varphi_{km},\cdot)$ for $i<k$, which follows from $\varphi_{ij}<\alpha\iff\varphi_{ij}<\varphi_{km}$ for all rejected angles. (5) App.~C: the pulled-back density equals $g(\tilde\bx,\tilde{\bm\phi})\,P_{h(\tilde\varphi_{\tilde k\tilde m}),h(\tilde\alpha)}\,\mathbb I_{\mathcal F}$, using rotation invariance of $\mathcal N\otimes\mathcal N$, the flipping identity for the bracket widths, and Remark~``psi\_transformed'' ($\tilde{\bm\psi}^\uparrow=\bm\psi^\uparrow$). (6) Summing over $m$ is a row sum, summing over $\tilde m$ is a column sum, both equal $1$; hence $(\bx,\bm\phi)\overset{d}{=}(\tilde\bx,\tilde{\bm\phi})$ and $\tilde\bx\sim\pi$.
+
+\paragraph{Verdict: correct.} Each step holds. In particular: the rotation of $(\bx-\bm\mu,\bnu-\bm\mu)$ by any angle preserves $\mathcal N(\bx;\bm\mu,\bm\Sigma)\mathcal N(\bnu;\bm\mu,\bm\Sigma)$ because $\cos^2+\sin^2=1$ and the cross terms cancel (App.~C, ``identGauss''); the set of evaluated points is the same on both paths (rotation identity), so the valid sets coincide as sets of points and $\tilde{\bm\psi}^\uparrow=\bm\psi^\uparrow$; the flipping identity is what makes $g$ symmetric between the two paths; the diagonal of $P$ is irrelevant because $\alpha$ is never a candidate. Double stochasticity is exactly the necessary and sufficient condition on $P$ for this proof, and the paper is right not to ask for symmetry.
+
+\paragraph{Points I would state explicitly (they are used but not said).}
+\begin{enumerate}[leftmargin=*]
+\item \emph{$T$ is an involution.} Eq.~(transformation\_inverse) is eq.~(transformation) with tildes swapped: $T^{-1}=T$, i.e.\ $T\circ T=\mathrm{id}$ (rotating back by $\alpha-\varphi_{km}$, and swapping again). Together with $T(\mathcal F)\subseteq\mathcal F$ (Lemma~1) this gives bijectivity of $T:\mathcal F\to\mathcal F$ in one line; the text's ``one-to-one transformation'' and ``we must use $\tilde k=k$'' can be replaced by this remark. It also places the proof in the involutive-MCMC framework of Andrieu, Lee \& Livingstone (2020) and Glatt-Holtz et al.\ (2024), which referees know.
+\item \emph{Unit Jacobian.} ``Straightforward'' is true but say why: the angle variables are mapped by a permutation that does not depend on $(\bx,\bnu)$, and given the angles $(\bx,\bnu)\mapsto(\tilde\bx,\tilde\bnu)$ is orthogonal; the Jacobian matrix is block triangular with determinant $\pm1$.
+\item \emph{$P$ must be a function of the unlabelled configuration.} Remark~``invariance'' (permutation invariance of $P$) is essential, not cosmetic: the proof needs $P(\tilde{\bm\psi}^\uparrow)=P(\bm\psi^\uparrow)$, which holds because the two paths evaluate the same \emph{set} of points. Any $P$ built from angular or Euclidean distances of the sorted set satisfies it; a $P$ that used the draw order or the round index $i$ would break the proof. State this as a hypothesis of the Proposition.
+\item \emph{The flipping lemma uses that rejected angles lie outside the final bracket.} $\varphi_{ij}<\alpha\Rightarrow\varphi_{ij}\le\ell_i\le\ell_{k-1}<\varphi_{km}$ for $i<k$. One sentence in the proof of eq.~(intermediate\_result\_mess) would make this visible; it is the same fact that makes Neal's (2003) shrinkage argument work.
+\item \emph{The cut at $0$ is an absolute position on the ellipse that $T$ preserves.} In rotation coordinates the cut sits at $-\alpha$ from $\bx$, i.e.\ at $\varphi_{km}-\alpha-\varphi_{km}=-\alpha$ measured from $\tilde\bx$ minus $\tilde\alpha$: the same point. This is why the proof goes through with the modified bracket; see the next paragraph for what the modification does to the algorithm.
+\end{enumerate}
+
+\paragraph{The modified ESS is not Murray's ESS.} Murray et al.\ draw the first angle uniformly on the circle and, if it is rejected, cut the circle \emph{at that rejected angle}; the paper instead draws $\alpha\sim U(0,2\pi]$ and cuts at angle $0$, a uniform point that is \emph{not} evaluated. The text says the redefinition ``achieves a natural repositioning'' and ``simplifies the proof''; it does not say that it changes the algorithm's law. It does:
+\begin{itemize}[leftmargin=*]
+\item On a connected slice, Murray's ESS returns an exact independent uniform draw from the slice (the slice is never cut). With the $\alpha$-cut, when the cut falls inside the slice (probability $p_1$) the first rejection discards the part of the slice beyond the cut, so the accepted angle depends on which side of the cut the current angle is. The kernel is still reversible w.r.t.\ the uniform law on the slice (symmetric $P$), hence invariant, but no longer an independent draw. Toy simulation (\code{toy_circle_sim.py}, $4\times10^4$ iterations on a fixed arc): lag-one autocorrelation of the position is $0.098$ ($p_1=0.3$) and $0.046$ ($p_1=0.1$) for the paper's ESS, $0.06/0.04$ for $M=2$, $0.035/0.03$ for $M=4$, and $0.00\pm0.005$ for Murray's ESS and for MESS with a circle-based bracket.
+\item It uses fewer rounds: $4.08$ vs $4.69$ at $p_1=0.1$ ($6.20$ vs $7.03$ at $p_1=0.03$), because Murray spends one evaluation to anchor the cut.
+\item On two antipodal arcs of fraction $q$ each, it switches arcs less often per iteration: $0.090$ vs $0.131$ ($q=0.05$), $0.020$ vs $0.030$ ($q=0.01$), i.e.\ $\approx25$--$30\%$ fewer switches per evaluation. The difference vanishes for $M\ge4$.
+\end{itemize}
+Recommendation for the paper: either (a) keep the $\alpha$-cut and state these facts in one paragraph (it is a legitimate variant; Hasenpflug, Telezhnikov \& Rudolf (2025) discuss the measure-theoretic set-up in which such variants live), or (b) define the bracket on the circle (initial bracket $=$ whole circle; after the first rejected angle on either side of $\alpha$ the bracket is the arc between the nearest rejected angles), which reproduces Murray's ESS at $M=1$. The involution proof adapts with the same $T$; the cut then becomes a rejected angle and is trivially preserved.
+
+\paragraph{Typos and label errors in the supplement (line numbers of \texttt{uai\_supplementary\_body.tex}).}
+\begin{enumerate}[leftmargin=*]
+\item l.~133, 143: ``$j=1,\ldots,P$'' should be $M$ (twice).
+\item l.~133, 143--144: ``$L(\cdot)\ge y$'' inside $\mathcal A_i(\tilde\bx,\dots,\tilde y,\dots)$ should read $\ge\tilde y$ (it is $\tilde y$ everywhere else).
+\item l.~151: ``Finally, (rest2)$(v)$ is given because \dots'' -- $(v)$ is the constraint on $\tilde y$, which was already established from (e); the sentence is proving the emptiness/non-emptiness of the valid sets, i.e.\ $(iii)$/$(iv)$, and then $(vi)$. Re-label.
+\item l.~123 and l.~151: both directions are dismissed with ``the only if direction is given by a similar reasoning''; since $T$ is an involution, the converse \emph{is} the same statement applied to $T^{-1}=T$ -- say that instead.
+\item l.~152: a commented ``Note to self: verify that this proof is correctly written'' is still in the source.
+\item l.~202 (eq.~lordering): ``$\bm\varphi_{1:i-j}$'' should be $\bm\varphi_{1:i-n}$.
+\item l.~249--250: ``$\tilde{\bm\varphi}_{0:i}$'' vs ``$\bm\varphi_{1:i}$'' elsewhere; choose one.
+\item l.~253: hard-coded ``Lemma 2.1''; use \code{\ref}.
+\item l.~280: ``summing all elements in column $r$'' -- the column is $h(\tilde\alpha;\tilde{\bm\psi})$, not $r$ (the row index of the forward entry); the matrix is $\bm P(\tilde{\bm\psi}^\uparrow)=\bm P(\bm\psi^\uparrow)$.
+\item Main text: Definition~3 indexes $P$ by $r,s=1..B$, Sec.~4 by $0..B-1$, Remark~3 puts $\alpha$ ``in position $0$''; eq.~(update\_sh) has a dangling ``for some positive $k$''.
+\end{enumerate}
+
+\paragraph{Ergodicity.} ``We employ the same irreducibility and aperiodicity arguments given by Murray et al.'' is not a proof (Murray et al.\ give an informal argument). A clean two-line argument for uniform $P$: conditional on round-$1$ acceptance, the accepted angle is exchangeable among the valid round-$1$ angles, hence uniform on the slice; so $K_{\mathrm{MESS}}(\bx,\cdot)\ge\big(1-(1-p_1(\bx,\bnu,y))^M\big)\,K_{\mathrm{ideal}}(\bx,\cdot)\ge K_{\mathrm{ESS}}$'s own minorising component, and the geometric-ergodicity proof of Natarovskii, Rudolf \& Sprungk (2021) goes through verbatim (their bound is driven by exactly this first-round component). For a general doubly-stochastic $P$ one needs a lower bound $P_{rs}\ge\varepsilon/(B-1)$; enforce it by mixing $P\leftarrow(1-\varepsilon)P+\varepsilon U$, which the LP can produce with zero entries otherwise (its $\lambda\to0$ vertices are permutation matrices).
+
+\paragraph{An alternative (shorter) proof of invariance.} The same content can be organised so that each step is a known lemma:
+\begin{enumerate}[leftmargin=*]
+\item \emph{Augmentation.} $\pi(\bx)\propto\mathcal N(\bx)L(\bx)$ is the $\bx$-marginal of $\bar\pi(\bx,\bnu,y,\alpha)\propto\mathcal N(\bx)\mathcal N(\bnu)\,\mathbb I\{0<y\le L(\bx)\}/(2\pi)$; drawing $(\bnu,y,\alpha)$ from their conditional given $\bx$ is a Gibbs step and leaves $\bar\pi$ invariant.
+\item \emph{Reduction to one dimension.} For fixed $(\bnu,y)$ let $R_\theta$ rotate $(\bx-\bm\mu,\bnu-\bm\mu)$ by $\theta$. $\mathcal N\otimes\mathcal N$ is $R_\theta$-invariant, so along the orbit $\{R_\theta(\bx,\bnu)\}$ the density $\bar\pi$ is constant times $\mathbb I\{\theta\in S\}$, $S$ the slice on the circle. It suffices to show that the angle kernel $Q(\theta,\cdot)$ (given orbit, $y$, and cut) leaves $\mathrm{Unif}(S)$ invariant.
+\item \emph{History symmetry (Neal 2003, Sec.~4.2).} Let $W$ be the multiset of all angles evaluated in an iteration, $R\subset W$ the rejected ones and $V=W\setminus R$ the valid ones. Because every rejected angle lies outside the final bracket and every valid one inside it, the sequence of brackets generated from $\theta$ equals the sequence generated from any $\theta'\in V$: the density of producing the history $(R,V)$ is the same function $\eta(R,V)$ of the unlabelled configuration, whatever the starting point in $V\cup\{\theta\}$. (This is the flipping lemma; with $M$ angles per round it is literally the same statement.)\footnote{With Murray's anchoring the same holds: the first angle is uniform on the circle from any starting point and the cut is then part of $R$.}
+\item \emph{Doubly stochastic selection.} $Q(\theta,\theta')=\int\eta\,P_{\theta\theta'}(V\cup\{\theta\})\,\mathrm d(\text{rest})$. For $\theta'\in S$, $\int_SQ(\theta,\theta')\,\mathrm d\theta=\int\eta\sum_{\theta\in V'\setminus\{\theta'\}}P_{\theta\theta'}\,\mathrm d(\text{rest})=\int\eta\,\mathrm d(\text{rest})=$ the density of $\theta'$ under $Q(\theta',\cdot)$ integrated over exits, which is $1$; i.e.\ $\mathrm{Unif}(S)Q=\mathrm{Unif}(S)$ by the column sums, and $Q^{*}$ is the same kernel with $P^\top$ by the row sums.\footnote{Rigor for the ``rest'' integrals is exactly what Hasenpflug, Telezhnikov \& Rudolf (2025) supply for ESS; the same measure-theoretic set-up carries over with $M$ angles per round.}
+\end{enumerate}
+The advantage over the present proof is not correctness but length and reuse: the rotation/Jacobian bookkeeping disappears into step~2, App.~A becomes step~3, and the reader sees immediately (i) why double stochasticity is the right condition, (ii) that reversibility holds iff $Q_P=Q_{P^\top}$, and (iii) that any bracket-anchoring rule that is a symmetric function of the history is admissible.
+
+\subsection{Other mathematical remarks}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Invariance $\neq$ reversibility -- state the correct fact.} The chain is reversible iff $K_P=K_{P^\top}$ (Section~\ref{sec:circulant}); uniform and circulant $P$ are reversible, the LP $P$ generally is not, and this is not a defect (Bierkens' inequality). One sentence in Sec.~3.2 plus the choice of a variance estimator valid for non-reversible chains closes the topic for a referee.
+\item \textbf{Ergodicity} -- see above; cite Natarovskii et al.\ (2021) and Hasenpflug, Telezhnikov \& Rudolf (2025).
+\end{itemize}
+
+\subsection{Claims that need revision}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Dimension-free.} Lines 65, 363, 367, 470 assert or strongly suggest dimension-free mixing. What you can argue is: MESS is well defined on the same infinite-dimensional Gaussian spaces as ESS (Hasenpflug et al.), and per-iteration behaviour is governed by the slice measure on the ellipse, which for fixed data does not degrade with the discretisation level. What the experiment actually varies is the number of unknown matrix entries $d$ with a growing data set, not a mesh refinement of a fixed function-space posterior (R3, R4, R5 all made this point). Either add a genuine mesh-refinement experiment (Section~\ref{sec:experiments}, E7) or rephrase as ``dimension-robust in the sense of Natarovskii et al., empirically'' and drop ``resolve without suffering from the curse of dimensionality''.
+\item \textbf{Transition-matrix variants.} Because of the bug, the reported Uniform/Angular/Euclidean differences (e.g.\ 2295/2241/2334; 2094/2318/2077; 2545/3095/3187) are noise. Re-run after the fix; expect small effects (Section~\ref{sec:useful}); consider replacing the LP by the circulant family, which also simplifies Section~5's cost discussion.
+\item \textbf{``At essentially no additional wall clock time''} (abstract) is true only if $M$ likelihoods are evaluated in parallel on otherwise idle hardware; say so and report both ESS/likelihood-evaluation and ESS/second with the hardware.
+\item \textbf{Comparisons are per iteration, not per cost} (Fig.~6-type plots). Normalise by likelihood evaluations and wall-clock.
+\item \textbf{MH baseline} tuned at $d=20$ and reused at all $d$ is an unfair baseline; use pCN with $\rho$ tuned per $d$ (you already have aMPCN), and mpCN.
+\end{itemize}
+
+\subsection{Typos and presentation}
+``specity'', ``obtaines'', ``variantes'', ``straigthforward'', ``Crank-Nicholson'' (Nicolson), ``give 23.4\%''; Table caption says a01 while the text says the average over 8 components; Fig.~1 caption ``$M=5$, four subsequent proposals are valid'' should say ``in the next round''. Algorithm boxes: give MESS as pseudocode side by side with ESS so $M=1$ reduction is visible at a glance.
+
+\subsection{As a computational-statistics referee}
+The contribution is a valid and well-proved multiproposal extension of ESS with a clean involutive proof. What is missing to be convincing: (1) a precise statement of what is gained \emph{per iteration} (nothing on connected slices with Murray's bracket, Claim~\ref{cl:connected}; a bounded gain on disconnected ones) versus \emph{per round} ($N_1/R_M$ fewer sequential rounds) -- right now the reader is left to guess; (2) a comparison at equal likelihood-evaluation and equal wall-clock budgets against the obvious competitor, $M$ independent ESS chains (R5), and against mpCN (R3) and MT-pCN; (3) honest treatment of the Pozza--Zanella limit (Section~\ref{sec:pz}); (4) working, tested LP variants or their removal; (5) a mesh-refinement experiment if dimension-freeness is claimed; (6) a statement that the modified bracket changes the law of ESS (Section~\ref{sec:proofreview}).
+
+\subsection{As an end user}
+I would want: one function \code{mess_chain(problem, x0, n, M, transition="uniform"|"circulant"|"lp", batch=True)}, an installable package with declared dependencies and a \code{cvxpy}-free default, a two-paragraph ``when to use'' guide (large $M$ when the first-round acceptance rate is low or the likelihood is symmetric through the prior mean; $M=1$ otherwise), guidance on choosing $M$ from the observed first-round acceptance rate (Section~\ref{sec:useful}), and reproducible scripts per figure.
+
+%======================================================================
+\section{UAI reviews and how to address them}\label{sec:uai}
+%======================================================================
+Found in \code{mess-jcgs/misc/mess_uai_rebuttal.tex} (commented block ``ORIGINAL REVIEWS BELOW''; scores 5, 6, 7, 7, 4). Consolidated:
+\begin{center}\small
+\begin{tabular}{@{}p{0.34\linewidth}p{0.08\linewidth}p{0.5\linewidth}@{}}
+\toprule
+Ask & Reviewer & Response in the revision \\
+\midrule
+Compare with $M$ independent ESS chains at equal budget; GPU/vectorised MCMC & R5, R4 & E1 (core benchmark). Cite Dance et al.\ (2025). Expect independent chains to win on stationary local observables; MESS to win on transient/mode-switching and sequential depth. Say so. \\
+Head-to-head with Recycled/EPESS (Fagan et al.\ 2016) & R2, R4 & E5. Note the difference: EPESS recycles \emph{sequentially} on one ellipse; MESS proposes in \emph{parallel} and shrinks jointly. \\
+Compare with mpCN, tuning protocol & R3 & E1 with oracle/practical $\rho$ per the handoff note. \\
+Uniform vs LP; LP cost & R2, R4 & Fix bug; E4 with circulant alternative; report overhead fraction. \\
+Non-adaptive equispaced angles, antithetic & R3 & E4 includes rank-based over-relaxed circulant $P$ (antithetic in spirit). \\
+Soften dimension-free claims; mesh refinement & R3, R4, R5 & E7; rewrite Sec.~5.1. \\
+Runtime, hardware, HMC/Gibbs tuning, accuracy metrics & R2, R4, R5 & Standard results schema of the handoff note (A8); error-to-reference metrics. \\
+Stepping-out/doubling variant; non-Gaussian priors & R1 & Short remark: stepping-out is unnecessary on a compact bracket; non-Gaussian priors via pseudo-prior factorisation (Nishihara et al.; Cabezas--Nemeth). \\
+Serial MESS worthwhile? Diminishing returns in $M$ & R3 & Section~\ref{sec:serial}: on a connected slice serial MESS($M$) has the \emph{same} per-iteration law as ESS but costs $MR_M/N_1$ times more evaluations ($\approx1.2\times$ for $M=2$, growing like $M/\log_2(M+1)$); on disconnected slices it can beat serial ESS per evaluation on mode switching by a bounded factor (toy: up to $1.45\times$); knee at $M\approx1/p_1$. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{When is MESS useful? MESS versus embarrassingly parallel ESS}\label{sec:useful}
+%======================================================================
+This section answers, with proofs where I have them and with a toy simulation where I do not, the questions: does a multiproposal chain stand a chance against $M$ independent copies of its single-proposal version at stationarity; when does MESS win; and is ``serial MESS'' ever worth it. All numbers quoted come from \code{toy_circle_sim.py} (this directory; output in \code{toy_circle_sim_output.txt}), a pure angle-space simulation with no likelihood: a slice $S$ is placed on the circle and the ESS/MESS angle procedures are run exactly as in \code{mess.py} (``paper'', $\alpha$-cut) and as in Murray et al.\ (``Murray'', cut at the first rejected angle; equivalently MESS with a circle-based bracket).
+
+\subsection{Notation and two elementary facts}
+Fix $\bx,\bnu,y$, the ellipse $\theta\mapsto\bx\cos\theta+\bnu\sin\theta$ (prior mean $0$) and the slice $S=\{\theta:L(\cdot)\ge y\}$ of measure fraction $p_1=|S|/2\pi$ (the first-round acceptance probability of one angle). Let $N_1$ be the expected number of rounds (= evaluations) of ESS per iteration and $R_M$ the expected number of rounds of MESS($M$) per iteration, so MESS uses $MR_M$ evaluations. Toy values for a connected slice ($p_1=0.1$; Murray bracket): $N_1=4.7$; $R_2=2.9,R_4=1.9,R_8=1.45,R_{16}=1.19,R_{32}=1.04$; evaluations $MR_M=5.8,7.7,11.6,19.0,33.2$. (Paper's $\alpha$-cut: $N_1=4.1$, $R_M$ within $\pm0.1$ of the above.)
+
+\begin{claim}[Connected slice]\label{cl:connected}
+Let $S\cap\{\text{initial bracket}\}$ be a single arc containing the current angle. (i) With Murray's bracket the accepted angle is an exact independent uniform draw from the arc, for every $M\ge1$ and uniform $P$; hence the $\bx$-kernel of MESS($M$) equals that of ESS. (ii) With the paper's $\alpha$-cut the accepted angle is \emph{not} independent of the current one; the kernel is reversible with respect to the uniform law on the arc, hence invariant, and the draw is independent exactly on the event that round $1$ accepts.
+\end{claim}
+\begin{proof}[Sketch]
+(i) Rejected angles lie outside $S$; with Murray's anchoring the first rejected angle becomes the cut and every later rejection removes the part of the bracket beyond the rejected angle on its side, so the arc is never cut and stays inside every bracket; the accepted angle is uniform on (final bracket)$\cap S=S$. With $M$ angles per round the accepted one is uniform among the valid angles of the accepting round, all of which are uniform on the bracket, so the same holds. (ii) The cut $c=-\alpha$ is uniform and independent of the slice; when $c\in S$ (probability $p_1$) $S$ is split by the cut, and the first rejection (which is necessarily beyond the far end of the current piece) removes the piece of $S$ on the other side of the cut. Reversibility follows from symmetry of $P$ and the involution (Section~\ref{sec:proofreview}). Toy: lag-one autocorrelation on a fixed arc $0.098$ ($p_1=0.3$), $0.046$ ($p_1=0.1$) for the paper's ESS; $0.06/0.04$ at $M=2$; $0.035/0.03$ at $M=4$; $0.00\pm0.005$ for Murray's bracket at every $M$.
+\end{proof}
+
+\begin{claim}[Sequential depth]\label{cl:depth}
+A round of $M$ i.i.d.\ uniform angles that are all rejected shrinks the bracket around $\alpha$ to a fraction $\approx1/(M+1)$ of its length in expectation, so $R_M\approx\log_{M+1}(1/p_1)+c_M$ against $N_1\approx\log_2(1/p_1)+c_1$. The wall-clock speed-up per iteration with $M$ parallel evaluations is $N_1/R_M$, at most $\approx\log_2(M+1)$ for large $1/p_1$ and less for moderate $p_1$ (toy, $p_1=0.1$: $1.6,2.5,3.2,4.0,4.5$ for $M=2,\dots,32$).
+\end{claim}
+
+\subsection{Serial MESS and the ``$M=2$ equals ESS'' question}\label{sec:serial}
+In ESS each round evaluates \emph{one} angle and, on rejection, moves \emph{one} endpoint (the one on the same side of $\alpha$ as the rejected angle); the other endpoint moves in a later round. Two endpoints are not needed in one round. MESS($2$) evaluates two angles per round; if both are rejected they move one or both endpoints. On a connected slice with Murray's bracket the two procedures produce the \emph{same law} (Claim~\ref{cl:connected}(i)), so ``$M=2$ serial MESS is equivalent to ESS'' is right in law -- but not in cost: MESS($2$) uses $2R_2$ evaluations against $N_1$, i.e.\ $1.27\times$ ($p_1=0.3$), $1.21\times$ ($p_1=0.1$), $1.20\times$ ($p_1=0.03$) more likelihood evaluations for the same output. The waste comes from the second angle of an accepting round (evaluated although the first already accepted) and from pairs of rejected angles on the same side of $\alpha$ (only the inner one shrinks). In general serial MESS($M$) costs $MR_M/N_1\approx M/\log_2(M+1)$ times ESS for the same law. So on connected slices serial MESS is never worth it, and my first draft's blanket ``never'' was right only there. Two exceptions:
+\begin{itemize}[leftmargin=*]
+\item \emph{Batched evaluation.} If the forward model is vectorised (SIMD/GPU, batched linear algebra, a neural surrogate) $M$ evaluations cost close to one; then ``serial'' MESS is the parallel case in disguise, and Claim~\ref{cl:depth} applies.
+\item \emph{Disconnected slices.} Per evaluation, MESS can switch arcs more often than ESS (next subsection): toy with two arcs of fraction $q=0.01$: $1.15\times$ ($M=8$), $1.38\times$ ($M=16$), $1.45\times$ ($M=32$), $1.35\times$ ($M=64$) more switches per evaluation than Murray's ESS ($2\times$ relative to the paper's ESS); at $q=0.05$ MESS never beats ESS per evaluation ($0.9$--$1.0\times$).
+\end{itemize}
+
+\subsection{What Pozza--Zanella actually prove, and what it implies}\label{sec:pz}
+Setting (Pozza \& Zanella 2024): a fixed number $K$ of proposals drawn jointly from $Q(x,\cdot)$ on $\mathcal X^K$, one of them or the current state is selected; $P^{(K)}$ is the resulting kernel and $\tilde P$ is the Metropolis--Hastings kernel with the marginal (mixture) proposal $\tilde Q=K^{-1}\sum_iQ_i$. Their Theorem~1 states that \emph{if $P^{(K)}$ is $\pi$-reversible} then $P^{(K)}(x,A\setminus\{x\})\le K\tilde P(x,A\setminus\{x\})$ for all $x,A$; the proof uses reversibility in its first line. Consequences:
+\begin{enumerate}[leftmargin=*]
+\item \emph{Spectral gap} (their Cor.~1): $\mathrm{Gap}(P^{(K)})\le K\,\mathrm{Gap}(\tilde P)$.
+\item \emph{Asymptotic variance} (Peskun--Tierney ordering, Tierney 1998, applied to the lazy kernel $\tilde P_K=(1-\tfrac1K)I+\tfrac1KP^{(K)}$, which is reversible and dominated off-diagonal by $\tilde P$): $\sigma^2(f,\tilde P)\le\sigma^2(f,\tilde P_K)=K\sigma^2(f,P^{(K)})+(K-1)\mathrm{Var}_\pi f$, i.e.
+\[
+\sigma^2\big(f,P^{(K)}\big)\;\ge\;\frac{\sigma^2(f,\tilde P)}{K}-\Big(1-\frac1K\Big)\mathrm{Var}_\pi f\qquad\forall f\in L^2(\pi).
+\]
+$K$ independent chains of $\tilde P$ with the same total number of evaluations achieve exactly $\sigma^2(f,\tilde P)/K$. Hence a reversible multiproposal chain can beat its embarrassingly parallel single-proposal version at stationarity by at most the additive term $(1-1/K)\mathrm{Var}_\pi f$, which is negligible precisely when the problem is hard ($\sigma^2\gg\mathrm{Var}_\pi f$) and irrelevant when it is easy. Their Remark~1 (Chang et al.\ 2022) shows the factor $K$ can be attained, so multiproposal can at best \emph{match} EP.
+\item \emph{Local proposals} (their Thm.~2, Cor.~2, Thm.~3): for sub-Gaussian/log-concave targets and local proposals the gain is only $O(\log K)$, so EP wins by $K/\log K$. Theorem~2's second bound uses linear test functions in the Dirichlet form and does \emph{not} need reversibility; it controls the right spectral gap of any $\pi$-invariant multiproposal chain.
+\item \emph{Non-reversible multiproposal chains} are not covered by Theorem~1. This is the only opening. A non-reversible chain can beat every reversible chain with the same proposal mechanism, but the known mechanisms need a persistent direction (lifting; Diaconis--Holmes--Neal 2000; Chen--Lov\'asz--Pak 1999) and the gain is at most of square-root type in mixing time (Cheeger: $t_{\rm mix}\gtrsim1/\Phi$ for every chain, $t_{\rm mix}\lesssim1/\Phi^2$ for reversible ones). Such a direction variable can be added to a single-proposal chain equally well, after which the EP argument applies again to the lifted chain. I know of no non-reversible multiproposal scheme that beats the EP version of its own single-proposal analogue by more than a constant, and I do not believe one exists in the ``one selected state per step'' paradigm; but this is an assessment, not a theorem. For MESS in particular the asymmetry of $P$ acts within one iteration only (Section~\ref{sec:circulant}), so MESS is effectively in the reversible regime.
+\item \emph{Where MESS does not fit the framework.} MESS is adaptive: the number of proposals per iteration is random ($MR_M$), later rounds depend on earlier ones, and the comparator $\tilde P$ would be a one-round ellipse proposal accepted iff on the slice (acceptance $p_1$), which is far worse than ESS with shrinkage. So Theorem~1 does not directly compare MESS with ESS; the direct comparison is Claims~\ref{cl:connected}--\ref{cl:depth} and the next subsection, and it reaches the same conclusion.
+\end{enumerate}
+\textbf{Verdict on the user's claim.} ``We cannot get a multiproposal algorithm that scales better than the embarrassingly parallel approach'' is a theorem for reversible fixed-$K$ schemes in the spectral-gap and (up to $(1-1/K)\mathrm{Var}f$) asymptotic-variance sense; it is a well-supported conjecture for non-reversible ones; and for MESS it holds by direct argument on connected slices and up to a bounded factor on disconnected ones. Pozza--Zanella say it themselves: ``in a parallel computing context \dots speeding up by a factor $K$ is \dots optimal usage''. Note that the theorem is about \emph{stationarity}; it says nothing about the transient, and their Section~2.1 is explicit that the potential of multiproposal schemes relative to independent chains (Rosenthal 2000) is ``to reduce the time required to reach stationarity \dots particularly appealing in contexts where $\pi$ is expensive to evaluate and/or the available runtime is limited'' -- which is where MESS legitimately lives (Section~\ref{sec:wins}; see also their Remark~4 on prefetching).
+
+\subsection{Direct comparison MESS vs EP-ESS at stationarity}\label{sec:direct}
+Cost model: $M$ processors; one round of $M$ parallel evaluations is the time unit (equivalently: serial, one evaluation is the unit -- the ratios below are the same). EP-ESS runs $M$ chains and completes $M/N_1$ iterations per round; MESS completes $1/R_M$.
+\begin{itemize}[leftmargin=*]
+\item \emph{Connected slice (Murray bracket).} Same per-iteration law (Claim~\ref{cl:connected}), so EP-ESS delivers $MR_M/N_1$ times more effective samples per unit time: toy $p_1=0.1$: $1.2,1.6,2.5,4.0,7.0$ for $M=2,4,8,16,32$. With the paper's $\alpha$-cut, ESS($M=1$) has extra within-slice autocorrelation ($\rho_1\approx0.05$--$0.1$) that MESS with larger $M$ does not, which shaves a few percent off these ratios -- an artefact of the bracket, removable for free by Murray's anchoring.
+\item \emph{Disconnected slice.} Let $s_M$ be the probability that MESS($M$) leaves the current arc in one iteration ($s_1$ for ESS). Switches per unit time: MESS $s_M/R_M$, EP-ESS $Ms_1/N_1$. Two bounds always hold: $s_1\ge q$ (a first-round hit of a far arc of fraction $q$ is accepted), and $s_M\le\mathbb E[\#\{\text{evaluated angles landing in far arcs}\}]$ (union bound). In the regime $M\gtrsim1/p_1$, where round $1$ accepts with high probability, the latter is $\approx Mq$, so the ratio MESS/EP is at most $\approx N_1/R_M$ -- the sequential-depth ratio of Claim~\ref{cl:depth}, itself at most $\approx\log_2(1/p_1)$. (ESS loses the far arc once it has rejected angles on both sides of the current one; MESS keeps it as long as one of its $M$ round-$1$ angles hits it, which is the whole mechanism.) Toy, two antipodal arcs: $q=0.05$: ratio $0.9,0.9,1.0,0.9,0.6,0.3$ for $M=2,\dots,64$ (EP-ESS wins or ties); $q=0.01$: $0.9,0.9,1.15,1.38,1.45,1.35$ (MESS wins by up to $1.45\times$ for $8\le M\le64$, then loses as $s_M$ saturates at $\tfrac12$ while EP keeps growing linearly; the bound $N_1/R_M\approx3.6$ at $M=8$ is loose). So MESS's mode-switching advantage is real but bounded, appears only when the far arcs are small \emph{and} $M\lesssim1/q$, and is an advantage for statistics limited by switching (between-mode weights, non-symmetric functionals), not for within-mode statistics, where EP-ESS wins by the connected-slice ratio.
+\item \emph{Fixed per-iteration overheads} (prior sampling $\bnu=L\bm z$ at $O(d^2)$, RNG, bookkeeping) are shared by the $M$ proposals in MESS but paid per chain in EP-ESS. This does not change the verdict: with overhead $c_\nu$ and evaluation cost $c_L$, throughput ratio EP/MESS $=M(c_\nu+R_Mc_L)/(c_\nu+N_1c_L)\ge1$, tending to $M$ when $c_\nu$ dominates.
+\end{itemize}
+
+\subsection{When MESS wins}\label{sec:wins}
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Transient / burn-in (Amdahl).} Burn-in is a sequential cost per chain that independent chains do not share. With $B$ burn-in iterations and the cost model above, EP-ESS produces nothing useful for $BN_1$ rounds and MESS for $BR_M$ rounds; equating the useful output $M(T-BN_1)/N_1=(T-BR_M)/R_M$ gives the break-even horizon
+\[
+T^\star=\frac{B\,N_1R_M\,(M-1)}{MR_M-N_1}\quad\text{rounds},\qquad
+\frac{T^\star}{BN_1}=\frac{R_M(M-1)}{MR_M-N_1},
+\]
+which for the toy values at $p_1=0.1$ equals $2.9,\,2.0,\,1.5,\,1.3,\,1.1$ for $M=2,4,8,16,32$.
+MESS is ahead whenever the total wall-clock budget is below $\approx1.1$--$3\times$ the burn-in time of one ESS chain. In expensive inverse problems (PDE forward models, minutes per evaluation, budgets of $10^3$--$10^4$ evaluations) this is the common regime, and it is also the regime in which one cannot afford $M$ burn-ins. The many-short-chains literature makes the same point from the other side (Margossian \& Gelman 2024; Sountsov, Carroll \& Hoffman 2024; unbiased couplings, Jacob, O'Leary \& Atchad\'e 2020, remove the bias but not the burn-in cost).
+\item \textbf{Independent chains are structurally unavailable.} ESS is most used as a \emph{block} inside Gibbs/Metropolis-within-Gibbs for latent Gaussian models (Murray \& Adams 2010): the latent field is updated by ESS given hyperparameters and vice versa. One cannot run $M$ independent ESS chains for the block; one can run MESS with $M$ parallel evaluations. Every sweep the ESS block starts from a state that is stale for the new hyperparameters, i.e.\ each block update is a mini-transient, which is where the sequential-depth reduction pays. This is, in my view, the strongest practical argument for MESS and it is absent from the paper.
+\item \textbf{$M$ evaluations cost about one} (batched/vectorised likelihoods on GPU or via BLAS; Dance et al.\ 2025): then $R_M$ rounds cost $R_M$ evaluations and MESS beats serial ESS by $N_1/R_M$ at identical law, while EP-ESS in the same hardware model is a different algorithm (vectorised independent chains) that wins at stationarity by the usual factor -- unless memory or the Gibbs embedding rule it out.
+\item \textbf{Within-chain mode switching on disconnected slices}, by a bounded factor ($\le N_1/R_M$; toy $1.45\times$), for switch-limited statistics.
+\item \textbf{Latency.} Time-to-first-good-sample and time-to-first-mode-switch are $N_1/R_M$ shorter; relevant for interactive or online use, irrelevant for asymptotic variance.
+\end{enumerate}
+
+\subsection{Is there a less fabricated case than sign-symmetric likelihoods?}\label{sec:cases}
+The sign symmetry $L(\bx)=L(-\bx)$ is special because $\theta\mapsto\theta+\pi$ maps $\bx\mapsto2\bm\mu-\bx$ on \emph{every} ellipse: it is the one multimodality that the ellipse is guaranteed to see, and it is genuine in blind deconvolution (kernel/image sign), real phase retrieval and bilinear models, factor-loading and ICA sign indeterminacy, and weight-space symmetries of neural networks. Two honest caveats, both of which you raised: (a) for sign-invariant functionals a chain stuck in one sign is inferentially harmless, so ``we mix between the signs'' is only valuable when the functional of interest is not sign-invariant, which is rare; (b) a prior that breaks the symmetry (half-space constraint on one coordinate, positivity) removes the multimodality altogether, at the price of changing the model. Generic (asymmetric) multimodality does not help MESS: a second mode at distance $\rho$ in direction $\bm u$ is within $\delta$ of the random ellipse only with probability $\approx(\delta/\rho)^{d-2}$. Less fabricated situations where slices are disconnected and MESS's per-iteration law genuinely differs from ESS's:
+\begin{itemize}[leftmargin=*]
+\item \textbf{Unimodal but non-log-concave posteriors with curved ridges} (banana, funnel, ring, the \code{polar_twist} targets already in \code{mcmc-internal}). A 1-D ellipse cuts a curved ridge in several arcs generically, without any symmetry. ESS moves along the ridge one arc at a time; MESS with large $M$ samples the whole slice. This is the natural showcase and it is already in your repo (E5$'$ below).
+\item \textbf{Constraint- or indicator-type likelihoods} (truncations, $\max/\min$ observation operators, censoring), where slices are unions of intervals by construction; when the constraints are linear the slices are analytic and LIN-ESS (Gessner et al.\ 2020; Wu \& Gardner 2024) makes both ESS and MESS unnecessary, so the case is non-linear constraints.
+\item \textbf{Non-differentiable / black-box forward models} (legacy PDE codes without adjoints, simulators with discontinuities): here gradient methods are out, pCN needs tuning, and ESS/MESS are the tuning-free options. This is where ESS is ``good or better than other methods'' in the first place; MESS adds items~1--3 of Section~\ref{sec:wins}.
+\end{itemize}
+Where ESS is \emph{not} competitive, and MESS cannot fix it: log-concave, gradient-available posteriors (MALA/HMC/$\infty$-MALA, auxiliary-gradient samplers of Titsias \& Papaspiliopoulos 2018, report $10$--$25\times$ over ESS on GP classification), and highly informative data with $p_1\ll1$ in every direction (ESS's per-iteration move is then tiny relative to the posterior scale in likelihood-dominated directions; Natarovskii et al.'s dimension-robustness is about prior-dominated directions).
+
+\textbf{Bottom line.} At stationarity, a reversible multiproposal chain cannot beat $M$ independent copies of its single-proposal version beyond lower-order terms (theorem), MESS included by direct argument; the honest case for MESS is the transient/budget-limited regime, Gibbs blocks where independent chains are not an option, batched likelihoods, and within-chain mode switching on disconnected slices by a bounded factor. $M=2$ buys $\times1.6$ fewer rounds; $M\approx1/p_1$ makes one round suffice with probability $\approx1-e^{-1}$ and is the natural cap ($p_1$ is observable online as the first-round acceptance rate). Distance-informed $P$ is a within-slice over-relaxation with functional-dependent sign; test it with the circulant family before investing further in the LP. The paper's $\alpha$-cut should either be stated as a variant with its consequences or replaced by the circle-based bracket.
+
+%======================================================================
+\section{Literature review and connections}\label{sec:lit}
+%======================================================================
+Items marked $\dagger$ are not yet in \code{references.bib}.
+\begin{description}[leftmargin=*,style=nextline]
+\item[Slice sampling foundations] Neal (2003) -- shrinkage, stepping-out, doubling, and \emph{over-relaxed} slice sampling (Sec.~8 of Neal), which is the closest ancestor of the distance-informed selection; Neal (1998, ordered over-relaxation)$^\dagger$; Roberts \& Rosenthal (1999, 2002)$^\dagger$ on slice-sampler convergence and polar slice sampling; Rudolf \& Ullrich (2018)$^\dagger$, {\L}atuszy\'nski \& Rudolf (2024)$^\dagger$ on hybrid slice samplers.
+\item[ESS family] Murray, Adams \& MacKay (2010); Nishihara, Murray \& Adams (2014) GESS (parallel chains fit a scale-mixture pseudo-prior -- a different use of parallelism); Fagan, Bhandari \& Cunningham (2016) EPESS with \emph{recycled} draws on one ellipse and analytic slices; Murray \& Adams (2010, slice sampling hyperparameters)$^\dagger$; Natarovskii, Rudolf \& Sprungk (2021) geometric ergodicity; Hasenpflug, Telezhnikov \& Rudolf (2024) infinite-dimensional well-posedness; Cabezas \& Nemeth (2023) TESS; Schär, Habeck \& Rudolf (2023) Gibbsian polar slice sampling$^\dagger$ (source of your polar-twist-type targets; must be cited); Wu \& Gardner (2024)$^\dagger$ and Gessner et al.\ (2020)$^\dagger$ analytic ESS for truncated Gaussians; Marco \& Tokdar (2026) \emph{Adaptive Generalized ESS}$^\dagger$ (new, directly competing on high-dimensional robustness; must be discussed); Dance, Glaser, Orbanz \& Adams (2025) vectorised ESS as a finite-state machine$^\dagger$ (R5's request; also the right framework to implement MESS on accelerators).
+\item[Multiproposal / multiple-try MCMC] Liu, Liang \& Wong (2000) MTM; Tjelmeland (2004) (your transition-matrix design principle); Frenkel (2004)$^\dagger$ and Delmas \& Jourdain (2009)$^\dagger$ waste recycling (use all $M$ evaluations in the estimator -- applicable to MESS: rejected proposals carry information); Craiu \& Lemieux (2007)$^\dagger$ antithetic/stratified MTM (R3's suggestion); B\'edard, Douc \& Moulines (2012)$^\dagger$ scaling of MTM; Calderhead (2014)$^\dagger$ general parallel MH construction; Martino (2018)$^\dagger$ review; Luo \& Tjelmeland (2019)$^\dagger$; Schwedes \& Calderhead (2021)$^\dagger$ Rao--Blackwellised parallel MCMC; Gagnon, Maire \& Zanella (2023)$^\dagger$ locally balanced MTM; Holbrook (2023)$^\dagger$ simplicial multiproposals; Glatt-Holtz, Holbrook, Krometis \& Mondaini (2024) mpCN and the involutive framework; the same authors (2026) ``Mad Props'' on the infinite-proposal limit$^\dagger$ (directly relevant to the $M\to\infty$ ideal-slice limit above); Lin et al.\ (2025) quantum speed-ups for multiproposal MCMC$^\dagger$; \textbf{Pozza \& Zanella (2024)}$^\dagger$ fundamental limits ($\le K$, and $O(\log K)$ for log-concave targets) -- the single most important missing citation.
+\item[Function-space / dimension-robust samplers] Cotter et al.\ (2013) pCN; Beskos et al.\ (2011); Hairer, Stuart \& Vollmer (2014); Titsias \& Papaspiliopoulos (2018)$^\dagger$ auxiliary-gradient samplers (report $10$--$25\times$ over ESS on GP classification -- a referee may bring this up).
+\item[Ensemble / population methods] Goodman \& Weare (2010)$^\dagger$, Karamanis \& Beutler (2021) ensemble slice sampling$^\dagger$, Neal (2011) ensemble MCMC$^\dagger$ -- alternative uses of $M$ parallel evaluations.
+\item[Fundamental limits, non-reversibility, many short chains] Pozza \& Zanella (2024)$^\dagger$ (Section~\ref{sec:pz}); Chang, Lee, Luo, Ma \& Zhou (2022)$^\dagger$ tightness of the factor $K$; Peskun (1973)$^\dagger$ and Tierney (1998)$^\dagger$ for the ordering used in Section~\ref{sec:pz}; Bierkens (2016)$^\dagger$ and Sun, Gomez \& Schmidhuber (2010)$^\dagger$ for ``non-reversible $\le$ symmetrised'' in asymptotic variance; Diaconis, Holmes \& Neal (2000)$^\dagger$, Chen, Lov\'asz \& Pak (1999)$^\dagger$, Andrieu \& Livingstone (2021)$^\dagger$ for what non-reversibility can and cannot buy; Andrieu, Lee \& Livingstone (2020)$^\dagger$ for the involutive-MCMC framing of the proof; Flegal \& Jones (2010)$^\dagger$ for variance estimators valid without reversibility; Brockwell (2006)$^\dagger$ prefetching (the transient/sequential-depth use of parallelism, outside the Pozza--Zanella framework, as they note); Margossian \& Gelman (2024)$^\dagger$, Sountsov, Carroll \& Hoffman (2024)$^\dagger$, Jacob, O'Leary \& Atchad\'e (2020)$^\dagger$ for the many-short-chains view of EP and its burn-in cost.
+\end{description}
+\textbf{Positioning.} MESS is best described as: ``ESS whose shrinkage is performed with $M$ parallel evaluations per round, and whose within-slice selection may be over-relaxed via a doubly-stochastic matrix on the sorted angles; it interpolates between ESS ($M=1$) and the ideal slice sampler on the ellipse ($M\to\infty$).'' This is honest, novel enough, and immediately places it relative to EPESS (sequential recycling), GESS (parallel chains for the pseudo-prior), mpCN (multiproposal MH), and vectorised ESS (implementation-level parallelism).
+
+%======================================================================
+\section{Numerical experiment plan}\label{sec:experiments}
+%======================================================================
+The handoff note (\code{mess-jcgs/instructions/mess_revision_handoff.md}) already fixes the fair-comparison contract, results schema and figure blueprint; I do not repeat them. The experiments below are chosen so that each one tests a specific claim of Section~\ref{sec:useful}, and I list them in the order in which they de-risk the paper.
+\begin{enumerate}[leftmargin=*,label=\textbf{E\arabic*}]
+\item \textbf{Equal-budget core benchmark.} ESS; MESS $M\in\{2,4,8,16,32\}$ uniform; $M$ independent ESS chains (EP-ESS) with the same total likelihood evaluations \emph{and} the same wall-clock on the same cores; mpCN (oracle and practical $\rho$); MT-pCN; pCN. Targets: GP classification (Murray's), solute transport ($d=20$), SBD. Metrics: ESS/s and ESS/eval for local and mode-sensitive observables; error-to-reference vs time; time-to-first-mode-switch. Expected: EP-ESS wins stationary local metrics; MESS wins transient and sequential-depth metrics. Report whichever way it comes out.
+\item \textbf{Sequential-depth law.} Record rounds per iteration and first-round acceptance $p_1$; plot mean rounds vs $M$ against $\log_{M+1}(1/p_1)$; plot ESS/s speed-up $S(M)$ against $\log_2(M+1)$. Include a controlled-cost version (your fixed-target workload wrapper) at cost levels $1,4,16,64$ to show where the overhead-dominated regime ends.
+\item \textbf{Connected-slice null test.} A log-concave target (Gaussian likelihood, or logistic regression with weak data) where slices are single arcs: show empirically that per-iteration autocorrelation of ESS and MESS($M$) coincide for all $M$ with Murray's bracket (Claim~\ref{cl:connected}(i)), and measure the excess autocorrelation of the paper's $\alpha$-cut at $M=1,2,4$ (Claim~\ref{cl:connected}(ii)). This pre-empts the ``why is $M$ not helping'' referee, motivates the honest framing, and decides whether to keep the $\alpha$-cut. The angle-space version is already done (\code{toy_circle_sim.py}); this is the same test on a real posterior.
+\item \textbf{Selection-rule ablation (after the fix).} Uniform vs corrected LP-angular vs corrected LP-Euclidean vs circulant rank-based (palindromic weights, several sharpness levels) vs deterministic ``farthest'' permutation. Report ESS/iteration, ESS/s, and overhead fraction (LP time / iteration time). Also run the \emph{buggy} LP once as a control to document that it equals uniform.
+\item \textbf{Symmetric multimodality and curved ridges.} SBD (sign ambiguity) and a synthetic $L(\bx)=L(-\bx)$ target with tunable arc measure $q$: mode-switch rate per iteration and per evaluation vs $M$; compare with EP-ESS switches per round ($Ms_1/N_1$) and with the bound $N_1/R_M$ of Section~\ref{sec:direct}. Add the non-symmetric, unimodal, non-log-concave \code{polar_twist}/banana targets (E5$'$): number of arcs per slice, ESS vs MESS autocorrelation along the ridge, and the same EP-ESS comparison -- this is the ``less fabricated'' showcase of Section~\ref{sec:cases}. Include a Gaussian-mixture target with modes \emph{not} symmetric through the prior mean to show the negative result. Add a \textbf{break-even experiment}: total wall-clock budget $T$ on the $x$-axis, error-to-reference of EP-ESS($M$ chains) and MESS($M$) on the $y$-axis, from a dispersed initialisation; the crossing should sit near $T^\star$ of Section~\ref{sec:wins}.
+\item \textbf{Recycled/EPESS head-to-head} on GP classification with the EP pseudo-prior available to both methods: EPESS with $J$ recycled draws per ellipse vs MESS with $M=J$ proposals per round at equal likelihood evaluations (R2, R4). Also MESS on top of the EP pseudo-prior (they compose).
+\item \textbf{Mesh refinement with fixed data} (genuine dimension test): 1-D elliptic or advection--diffusion inverse problem with a KL-expanded Gaussian random field, fixed observations, discretisation $n\in\{32,64,\dots,1024\}$: ESS/MESS/pCN autocorrelation vs $n$. Only with this can ``dimension-robust'' stay in the abstract.
+\item \textbf{Adaptive $M$.} Warm-up estimates $p_1$, sets $M=\lceil c/p_1\rceil$ capped by the core count, then freezes. Compare with fixed $M$.
+\item \textbf{Waste recycling (optional, new contribution).} Use all evaluated proposals in a weighted estimator (Frenkel; Delmas--Jourdain; Schwedes--Calderhead) and measure variance reduction; the MESS involution gives the needed weights for free.
+\end{enumerate}
+Seeds, budgets and the output schema per your handoff A2/A8; use \code{git_commit} in every results row.
+
+%======================================================================
+\section{Prioritised action plan}
+%======================================================================
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Fix the LP labelling bug} in one place (after step 3, one place will be the only place), add the label-mapping and invariance tests, and add an $\varepsilon$-mixing with the uniform matrix so that $P$ has no zero off-diagonal entries (ergodicity, Section~\ref{sec:proofreview}). Do \emph{not} add a symmetry constraint (Section~\ref{sec:circulant}); instead switch the ESS estimator to batch means/spectral when $P$ is not symmetric. Mark all existing LP results as invalid in the experiment reports.
+\item \textbf{Add \code{transition.py}} with \code{uniform}, \code{circulant}, \code{lp} (lazy \code{cvxpy}); add \code{mess_chain()} in \code{chains.py}; add \code{log_likelihood_batch}.
+\item \textbf{Consolidate repositories}: move \code{mess-internal} experiments and unique problems into \code{mcmc-internal}, delete duplicated algorithm files, remove the \code{sys.path} hack, write a real \code{pyproject.toml}, one environment file, delete the empty \code{.venv}s, write \code{scripts/export_public_mess.py}, and tag the current state of all repos first so nothing is lost.
+\item \textbf{Replace the ESS estimator} with an FFT-based Geyer IPS validated against \code{arviz}; re-check the dimension-sweep MH numbers.
+\item \textbf{Manuscript}: rewrite the abstract, Section~1 and Section~5.1 around the framing of Section~\ref{sec:useful} (transient, Gibbs blocks, batched likelihoods, bounded mode-switching gain; EP-ESS as the stationary benchmark); add the Pozza--Zanella discussion with the reversibility caveat; state that the $\alpha$-cut changes the law of ESS (or move to the circle-based bracket); add the involution remark, the permutation-invariance hypothesis on $P$, the reversibility characterisation $K_P^*=K_{P^\top}$ and Bierkens' inequality, the ergodicity argument via Natarovskii et al.; fix the supplement typos of Section~\ref{sec:proofreview}; add the Marco--Tokdar and Schär et al.\ citations; move comparisons to per-cost axes.
+\item \textbf{Run E3, E2, E5 first} (cheap, theory-confirming, and they decide the narrative), then E1 and E4, then E7 and E6.
+\item \textbf{Optional new material} that would strengthen a JCGS submission: the circulant selection with the reflection-based reversibility proof (Section~\ref{sec:circulant}), the adaptive-$M$ rule, MESS as a block inside Gibbs for a latent Gaussian model (the strongest practical use case), and waste recycling.
+\end{enumerate}
+
+\appendix
+\section{Reproduction of the bug check}
+Run with the conda environment \code{mess-env} from \code{mess-internal}:
+\begin{lstlisting}
+import numpy as np
+from mess.algorithms.utils import solve_transition_lp
+alpha = 3.0; phi = np.array([5.5, 0.4, 3.2, 1.0]); A = np.arange(4)
+psi = np.concatenate([phi, [alpha]]); ps = np.sort(psi)
+D = np.abs(ps[:, None] - ps[None, :]); D = np.minimum(D, 2*np.pi - D)
+P0 = np.ones((5, 5))/4; np.fill_diagonal(P0, 0)
+P1 = solve_transition_lp(D, P0, lam=0.1)
+cur = int(np.where(ps == alpha)[0][0]); row = np.delete(P1[cur], cur)
+# implemented: A[k] gets row[k]; correct: np.delete(np.argsort(psi), cur)[k] gets row[k]
+\end{lstlisting}
+
+\begin{thebibliography}{99}\small
+\bibitem{andrieu2020} Andrieu, C., Lee, A., Livingstone, S. (2020). A general perspective on the Metropolis--Hastings kernel. arXiv:2012.14881.
+\bibitem{andrieu2021} Andrieu, C., Livingstone, S. (2021). Peskun--Tierney ordering for Markovian Monte Carlo: beyond the reversible scenario. Ann.\ Statist.\ 49.
+\bibitem{bierkens2016} Bierkens, J. (2016). Non-reversible Metropolis--Hastings. Stat.\ Comput.\ 26.
+\bibitem{brockwell2006} Brockwell, A.E. (2006). Parallel Markov chain Monte Carlo simulation by pre-fetching. J.\ Comput.\ Graph.\ Statist.\ 15.
+\bibitem{cabezas2023} Cabezas, A., Nemeth, C. (2023). Transport elliptical slice sampling. AISTATS.
+\bibitem{calderhead2014} Calderhead, B. (2014). A general construction for parallelizing Metropolis--Hastings algorithms. PNAS 111(49).
+\bibitem{chang2022} Chang, H., Lee, C., Luo, Z.T., Sang, H., Zhou, Q. (2022). Rapidly mixing multiple-try Metropolis algorithms for model selection problems. NeurIPS 35.
+\bibitem{chen1999} Chen, F., Lov\'asz, L., Pak, I. (1999). Lifting Markov chains to speed up mixing. STOC.
+\bibitem{craiu2007} Craiu, R.V., Lemieux, C. (2007). Acceleration of the multiple-try Metropolis algorithm using antithetic and stratified sampling. Stat.\ Comput.\ 17.
+\bibitem{dance2025} Dance, H., Glaser, P., Orbanz, P., Adams, R. (2025). Efficiently vectorized MCMC on modern accelerators. arXiv:2503.17405.
+\bibitem{delmas2009} Delmas, J.-F., Jourdain, B. (2009). Does waste recycling really improve the multi-proposal Metropolis--Hastings algorithm? J.\ Appl.\ Probab.\ 46.
+\bibitem{diaconis2000} Diaconis, P., Holmes, S., Neal, R.M. (2000). Analysis of a nonreversible Markov chain sampler. Ann.\ Appl.\ Probab.\ 10.
+\bibitem{fagan2016} Fagan, F., Bhandari, J., Cunningham, J.P. (2016). Elliptical slice sampling with expectation propagation. UAI.
+\bibitem{flegal2010} Flegal, J.M., Jones, G.L. (2010). Batch means and spectral variance estimators in Markov chain Monte Carlo. Ann.\ Statist.\ 38.
+\bibitem{frenkel2004} Frenkel, D. (2004). Speed-up of Monte Carlo simulations by sampling of rejected states. PNAS 101(51).
+\bibitem{gagnon2023} Gagnon, P., Maire, F., Zanella, G. (2023). Improving multiple-try Metropolis with local balancing. JMLR 24.
+\bibitem{gessner2020} Gessner, A., Kanjilal, O., Hennig, P. (2020). Integrals over Gaussians under linear domain constraints. AISTATS.
+\bibitem{ghhkm2024} Glatt-Holtz, N.E., Holbrook, A.J., Krometis, J.A., Mondaini, C.F. (2024). Parallel MCMC algorithms: theoretical foundations, algorithm design, case studies. Trans.\ Math.\ Appl.
+\bibitem{ghhkm2026} Glatt-Holtz, N.E., Holbrook, A.J., Krometis, J.A., Mondaini, C.F. (2026). Mad Props: parallelism in MCMC through the lens of the infinite proposal limit. arXiv:2605.21899.
+\bibitem{goodman2010} Goodman, J., Weare, J. (2010). Ensemble samplers with affine invariance. CAMCoS 5.
+\bibitem{hasenpflug2025} Hasenpflug, M., Telezhnikov, V., Rudolf, D. (2025). Reversibility of elliptical slice sampling revisited. Bernoulli 31, 1377--1401.
+\bibitem{holbrook2023} Holbrook, A.J. (2023). Generating MCMC proposals by randomly rotating the regular simplex. J.\ Multivariate Anal.
+\bibitem{jacob2020} Jacob, P.E., O'Leary, J., Atchad\'e, Y.F. (2020). Unbiased Markov chain Monte Carlo methods with couplings. JRSS-B 82.
+\bibitem{karamanis2021} Karamanis, M., Beutler, F. (2021). Ensemble slice sampling. Stat.\ Comput.\ 31.
+\bibitem{latuszynski2024} {\L}atuszy\'nski, K., Rudolf, D. (2024). Convergence of hybrid slice sampling via spectral gap. Adv.\ Appl.\ Probab.
+\bibitem{lin2025} Lin, C.-Y., Chen, K.-C., Lemey, P., Suchard, M.A., Holbrook, A.J., Hsieh, M.-H. (2025). Quantum speedups for multiproposal MCMC. Bayesian Anal.
+\bibitem{liu2000} Liu, J.S., Liang, F., Wong, W.H. (2000). The multiple-try method and local optimization in Metropolis sampling. JASA 95.
+\bibitem{marco2026} Marco, N., Tokdar, S.T. (2026). Adaptive generalized elliptical slice sampling. arXiv:2605.21659.
+\bibitem{margossian2024} Margossian, C.C., Gelman, A. (2024). For how many iterations should we run Markov chain Monte Carlo? arXiv:2311.02726.
+\bibitem{martino2018} Martino, L. (2018). A review of multiple try MCMC algorithms for signal processing. Digital Signal Processing 75.
+\bibitem{murray2010} Murray, I., Adams, R.P., MacKay, D.J.C. (2010). Elliptical slice sampling. AISTATS.
+\bibitem{murrayadams2010} Murray, I., Adams, R.P. (2010). Slice sampling covariance hyperparameters of latent Gaussian models. NeurIPS.
+\bibitem{natarovskii2021} Natarovskii, V., Rudolf, D., Sprungk, B. (2021). Geometric convergence of elliptical slice sampling. ICML.
+\bibitem{neal1998} Neal, R.M. (1998). Suppressing random walks in MCMC using ordered overrelaxation. In \emph{Learning in Graphical Models}.
+\bibitem{neal2003} Neal, R.M. (2003). Slice sampling. Ann.\ Statist.\ 31.
+\bibitem{neal2011} Neal, R.M. (2011). MCMC using ensembles of states for problems with fast and slow variables. arXiv:1101.0387.
+\bibitem{nishihara2014} Nishihara, R., Murray, I., Adams, R.P. (2014). Parallel MCMC with generalized elliptical slice sampling. JMLR 15.
+\bibitem{peskun1973} Peskun, P.H. (1973). Optimum Monte-Carlo sampling using Markov chains. Biometrika 60.
+\bibitem{pozza2024} Pozza, F., Zanella, G. (2024). On the fundamental limitations of multiproposal Markov chain Monte Carlo algorithms. arXiv:2410.23174.
+\bibitem{roberts1999} Roberts, G.O., Rosenthal, J.S. (1999). Convergence of slice sampler Markov chains. JRSS-B 61.
+\bibitem{roberts2002} Roberts, G.O., Rosenthal, J.S. (2002). The polar slice sampler. Stoch.\ Models 18.
+\bibitem{rosenthal2000} Rosenthal, J.S. (2000). Parallel computing and Monte Carlo algorithms. Far East J.\ Theor.\ Statist.\ 4.
+\bibitem{rudolf2018} Rudolf, D., Ullrich, M. (2018). Comparison of hit-and-run, slice sampler and random walk Metropolis. J.\ Appl.\ Probab.\ 55.
+\bibitem{schar2023} Schär, P., Habeck, M., Rudolf, D. (2023). Gibbsian polar slice sampling. ICML.
+\bibitem{schwedes2021} Schwedes, T., Calderhead, B. (2021). Rao--Blackwellised parallel MCMC. AISTATS.
+\bibitem{sountsov2024} Sountsov, P., Carroll, C., Hoffman, M.D. (2024). Running Markov chain Monte Carlo on modern hardware and software. arXiv:2411.04260.
+\bibitem{sun2010} Sun, Y., Gomez, F., Schmidhuber, J. (2010). Improving the asymptotic performance of Markov chain Monte-Carlo by inserting vortices. NeurIPS.
+\bibitem{tierney1998} Tierney, L. (1998). A note on Metropolis--Hastings kernels for general state spaces. Ann.\ Appl.\ Probab.\ 8.
+\bibitem{titsias2018} Titsias, M.K., Papaspiliopoulos, O. (2018). Auxiliary gradient-based sampling algorithms. JRSS-B 80.
+\bibitem{tjelmeland2004} Tjelmeland, H. (2004). Using all Metropolis--Hastings proposals to estimate mean values. Tech.\ report, NTNU.
+\bibitem{wu2024} Wu, K., Gardner, J.R. (2024). A fast, robust elliptical slice sampling implementation for linearly truncated multivariate normal distributions. arXiv:2407.10449.
+\end{thebibliography}
+
+\end{document}
