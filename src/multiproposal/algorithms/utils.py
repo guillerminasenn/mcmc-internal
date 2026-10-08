@@ -1,6 +1,26 @@
 # Small algorithm helpers (angles, brackets)
-import cvxpy as cp
 import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+
+def solve_transition_assignment(D):
+    """Exact solution of the lam=0 transition problem.
+
+    max <D, P> over doubly stochastic P with zero diagonal is attained at a
+    vertex of that face of the Birkhoff polytope, i.e. a permutation matrix
+    without fixed points. Returns the maximum-weight such permutation matrix.
+    """
+    D = np.asarray(D, dtype=float)
+    n = D.shape[0]
+    if D.ndim != 2 or D.shape[1] != n or n < 2:
+        raise ValueError("D must be a square matrix of size >= 2")
+    cost = -D
+    np.fill_diagonal(cost, np.inf)
+    rows, cols = linear_sum_assignment(cost)
+    P = np.zeros((n, n))
+    P[rows, cols] = 1.0
+    return P
+
 
 def solve_transition_lp(
     D,
@@ -19,6 +39,7 @@ def solve_transition_lp(
         col sums = 1
         diag(P) = 0
     """
+    import cvxpy as cp
 
     d = D.shape[0]
 

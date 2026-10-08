@@ -2,7 +2,7 @@
 
 # algorithms/mess.py
 import numpy as np
-from .utils import solve_transition_lp
+from .utils import solve_transition_assignment, solve_transition_lp
 
 def mess_step(
     x,
@@ -14,6 +14,7 @@ def mess_step(
     lam=0.1,
     P0=None,
     return_diagnostics=False,
+    lp_solver=None,
 ):
     """Perform a MESS step.
     Parameters
@@ -40,7 +41,13 @@ def mess_step(
         function in lp.
     P0 : np.ndarray or None
         Initial doubly stochastic matrix for the transition probabilities.
-        If None, a uniform matrix with zero diagonal is used.
+        If None, a uniform matrix with zero diagonal is used. Only used
+        by the 'highs' solver; never modified in place.
+    lp_solver : {'assignment', 'highs'} or None
+        Solver for the transition matrix when use_lp=True. 'assignment'
+        is exact for lam == 0 (max-weight derangement). 'highs' solves
+        the regularised LP with cvxpy. None selects 'assignment' if
+        lam == 0 and 'highs' otherwise.
     return_diagnostics : bool
         If True, return per-iteration diagnostics including the accepted
         proposal index and distances to all candidates.
@@ -56,8 +63,17 @@ def mess_step(
     diagnostics : list
         Per-iteration diagnostic data (only if return_diagnostics=True).
     """
+    if use_lp:
+        if lp_solver is None:
+            lp_solver = 'assignment' if lam == 0 else 'highs'
+        if lp_solver not in ('assignment', 'highs'):
+            raise ValueError(f"Unknown lp_solver: {lp_solver!r}")
+        if lp_solver == 'assignment' and lam != 0:
+            raise ValueError("lp_solver='assignment' requires lam == 0")
+
     # Initialize transition matrix to None
     P1 = None
+    accepted_sorted_pos = None
     diagnostics = [] if return_diagnostics else None
 
     # Center the current state and the auxiliary sample from the prior
@@ -121,7 +137,8 @@ def mess_step(
             # Sample the proposal using a transition matrix computed with lp
             if use_lp:
                 psi = np.concatenate([phi_vector[A], np.array([alpha])])
-                psi_sorted = np.sort(psi)
+                order = np.argsort(psi)  # order[k] = index in psi of k-th smallest angle
+                psi_sorted = psi[order]
                 
                 # Compute the distance matrix
                 if distance_metric== 'angular':
@@ -147,26 +164,53 @@ def mess_step(
                 # Compute the transition matrix
 
                 # If not specified, use the initial doubly stochastic matrix (uniform, zero diagonal)
-                if P0 is None:
-                    P0 = np.ones((len(A) + 1 , len(A) + 1)) / (len(A))
-                np.fill_diagonal(P0, 0)
+                if lp_solver == 'highs':
+                    if P0 is None:
+                        P0_used = np.ones((len(A) + 1, len(A) + 1)) / len(A)
+                    else:
+                        P0_used = np.array(P0, dtype=float)
+                    np.fill_diagonal(P0_used, 0)
 
                 # Solve
-                P1 = solve_transition_lp(D, P0, lam=lam, verbose=False)
+                if lp_solver == 'assignment':
+                    P1 = solve_transition_assignment(D)
+                else:
+                    P1 = solve_transition_lp(D, P0_used, lam=lam, verbose=False)
                 
                 # Sample i according to the row of P1 corresponding to the current state
-                current_index = np.where(psi_sorted == alpha)[0][0]
+                # alpha was appended last to psi, so it sits at index len(A)
+                current_index = int(np.where(order == len(A))[0][0])
                 row_P1 = P1[current_index, :]
 
                 # Remove index corresponding to the current state
                 row_P1 = np.delete(row_P1, current_index)
-                i = rng.choice(A, p=row_P1)
+                row_P1 = np.clip(row_P1, 0.0, None)
+                row_P1 = row_P1 / row_P1.sum()
+
+                # Map sorted positions back to psi indices (h^{-1}), then to A
+                labels = np.delete(order, current_index)
+                k = rng.choice(len(row_P1), p=row_P1)
+                i = A[labels[k]]
+                accepted_sorted_pos = int(k if k < current_index else k + 1)
 
             # Sample uniformly among the valid proposals
             else:
                 i = rng.choice(A)
             if return_diagnostics and diag_entry is not None:
                 diag_entry['accepted_index'] = int(i)
+                if distance_metric == 'euclidean':
+                    dist_all = diag_entry['euclidean_distances']
+                elif distance_metric == 'euclidean_squared':
+                    dist_all = diag_entry['euclidean_distances'] ** 2
+                else:
+                    dist_all = diag_entry['angular_distances']
+                others = A[A != i]
+                diag_entry['accepted_distance'] = float(dist_all[i])
+                diag_entry['mean_other_valid_distance'] = (
+                    float(dist_all[others].mean()) if others.size else float('nan')
+                )
+                diag_entry['accepted_sorted_position'] = accepted_sorted_pos
+                diag_entry['lp_solver'] = lp_solver if use_lp else None
 
             if return_diagnostics:
                 return x_prop_vector[:, i], nr_intervals, P1, diagnostics
