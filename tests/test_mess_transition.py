@@ -134,6 +134,51 @@ def test_solver_argument_validation():
                   lam=0.0, lp_solver="bogus")
 
 
+@pytest.mark.parametrize("metric", ["angular", "euclidean"])
+@pytest.mark.parametrize("lam,solver,expected_solver", [
+    (0.0, None, "assignment"),
+    (0.1, None, "highs"),
+    (0.0, "assignment", "assignment"),
+    (0.0, "highs", "highs"),
+    (0.1, "highs", "highs"),
+])
+def test_solver_dispatch_and_distance_diagnostics(monkeypatch, metric, lam, solver, expected_solver):
+    calls = []
+
+    def assignment_solver(distances):
+        calls.append("assignment")
+        return np.roll(np.eye(distances.shape[0]), 1, axis=1)
+
+    def highs_solver(distances, previous, lam, verbose):
+        calls.append("highs")
+        return np.roll(np.eye(distances.shape[0]), 1, axis=1)
+
+    monkeypatch.setattr(mess_module, "solve_transition_assignment", assignment_solver)
+    monkeypatch.setattr(mess_module, "solve_transition_lp", highs_solver)
+    problem = ConstantLikelihood(np.zeros(2), np.eye(2))
+    angles = np.array([5.5, 0.4, 3.2, 1.0])
+    rng = ScriptedRng([0.5, 3.0, angles])
+    sample, _, _, diagnostics = mess_step(
+        np.zeros(2), problem, rng, M=4, use_lp=True,
+        distance_metric=metric, lam=lam, lp_solver=solver, return_diagnostics=True,
+    )
+
+    assert calls == [expected_solver]
+    entry = diagnostics[-1]
+    assert entry["lp_solver"] == expected_solver
+    if metric == "angular":
+        differences = np.abs(angles - 3.0)
+        distances = np.minimum(differences, 2 * np.pi - differences)
+    else:
+        distances = np.sqrt(2.0) * np.abs(np.sin(angles - 3.0))
+        assert entry["accepted_distance"] == pytest.approx(np.linalg.norm(sample))
+    accepted = entry["accepted_index"]
+    assert entry["accepted_distance"] == pytest.approx(distances[accepted])
+    assert entry["mean_other_valid_distance"] == pytest.approx(
+        np.delete(distances, accepted).mean()
+    )
+
+
 def test_highs_path_does_not_mutate_P0():
     problem = ConstantLikelihood(np.zeros(2), np.eye(2))
     P0 = np.ones((4, 4)) / 3

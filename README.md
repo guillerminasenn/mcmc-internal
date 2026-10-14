@@ -40,6 +40,14 @@ This repository implements multiproposal MCMC algorithms based on the pCN propos
 
 ## Repository structure
 
+### Platform contracts (development)
+
+The first versioned problem-provider, experiment, result, and execution contracts
+are available under `multiproposal.platform`. See
+[Platform Contracts V1](docs/platform_contracts.md) for ownership, serialization,
+provider entry points, and focused verification. These are interfaces and data
+contracts, not yet a worker service, registry, problem catalog, or visualization app.
+
 ### src/multiproposal/algorithms
 
 - ess.py: ESS (equivalent to MESS with M = 1)

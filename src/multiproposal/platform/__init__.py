@@ -1,0 +1,59 @@
+"""Minimal contracts for reproducible problem and sampler execution."""
+
+from .execution import ExecutionClient, RunRecord, RunStatus, SamplerAdapter
+from .problems import (
+    PROBLEM_PROVIDER_GROUP,
+    ForwardProblem,
+    GaussianPriorAdapter,
+    GaussianPriorRuntime,
+    PlotDataProvider,
+    ProblemProvider,
+    ProviderMetadata,
+    ReferenceProvider,
+    RuntimeProblem,
+    SimulationProvider,
+    VariableSpec,
+    validate_runtime,
+)
+from .results import ArtifactRecord, ResultReader, ResultSchema, RunManifest
+from .specs import (
+    HASH_VERSION,
+    SCHEMA_VERSION,
+    ExperimentSpec,
+    ProblemSpec,
+    SamplerSpec,
+    SeedSpec,
+    canonical_json,
+    content_hash,
+)
+
+__all__ = [
+    "HASH_VERSION",
+    "PROBLEM_PROVIDER_GROUP",
+    "SCHEMA_VERSION",
+    "ArtifactRecord",
+    "ExecutionClient",
+    "ExperimentSpec",
+    "ForwardProblem",
+    "GaussianPriorAdapter",
+    "GaussianPriorRuntime",
+    "PlotDataProvider",
+    "ProblemProvider",
+    "ProblemSpec",
+    "ProviderMetadata",
+    "ReferenceProvider",
+    "ResultReader",
+    "ResultSchema",
+    "RunManifest",
+    "RunRecord",
+    "RunStatus",
+    "RuntimeProblem",
+    "SamplerAdapter",
+    "SamplerSpec",
+    "SeedSpec",
+    "SimulationProvider",
+    "VariableSpec",
+    "canonical_json",
+    "content_hash",
+    "validate_runtime",
+]
