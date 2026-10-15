@@ -155,14 +155,14 @@ def execute(registry: Registry, execution_id: str) -> None:
         artifacts, schemas, costs = [], {}, {}
         draws = spec.warmup + spec.draws
         for s in range(len(spec.samplers)):
+            parameter = metadata.parameters[0]
             stacked = np.stack([collected[s][c]["arrays"]["parameters"] for c in range(spec.chains)])
             relative = f"artifacts/sampler_{s}.npz"
             target = directory / relative
-            np.savez(target, parameters=stacked)
+            np.savez(target, **{parameter.name: stacked})
             target.chmod(0o444)
             artifacts.append(ArtifactRecord(relative, _sha256(target), target.stat().st_size,
                                             "posterior"))
-            parameter = metadata.parameters[0]
             schemas[f"sampler_{s}"] = ResultSchema(
                 variables=(VariableSpec(
                     parameter.name, dims=("chain", "draw", *parameter.dims),

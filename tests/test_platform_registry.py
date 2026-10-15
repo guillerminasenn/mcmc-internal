@@ -207,8 +207,11 @@ class DetachedExecutionTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(data).hexdigest(), artifact["sha256"])
             self.assertFalse(os.access(directory / artifact["path"], os.W_OK))
         import numpy as np
+        schema = manifest["result_schemas"]["sampler_0"]["variables"][0]
+        variable_name = schema["name"]
         with np.load(directory / "artifacts" / "sampler_0.npz", allow_pickle=False) as archive:
-            self.assertEqual(archive["parameters"].shape, (4, 40, 2))
+            self.assertEqual(set(archive.files), {variable_name})
+            self.assertEqual(archive[variable_name].shape, (4, 40, 2))
         self.assertIn("starting", (directory / "logs" / "stdout.log").read_text())
 
     def test_cancel_running_worker(self):
