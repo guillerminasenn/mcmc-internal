@@ -136,6 +136,52 @@ class Registry:
             )
         return self.snapshot(execution_id)
 
+    def register_legacy(
+        self,
+        *,
+        execution_id: str,
+        run_id: str,
+        data_id: str,
+        status: RunStatus,
+        created_at: str,
+        execution_dir: str,
+        spec_sha256: str,
+        progress: dict[str, object] | None = None,
+        worker: dict[str, object] | None = None,
+        error: str | None = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        heartbeat_at: str | None = None,
+    ) -> RunRecord:
+        """Register an existing sealed execution directory without launching a worker."""
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT execution_id FROM runs WHERE execution_id = ?", (execution_id,)
+            ).fetchone()
+            if row is not None:
+                return self.snapshot(execution_id)
+            connection.execute(
+                "INSERT INTO runs (execution_id, run_id, data_id, status, created_at, "
+                "started_at, finished_at, heartbeat_at, execution_dir, spec_sha256, progress, "
+                "worker, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    execution_id,
+                    run_id,
+                    data_id,
+                    status.value,
+                    created_at,
+                    started_at,
+                    finished_at,
+                    heartbeat_at,
+                    execution_dir,
+                    spec_sha256,
+                    json.dumps(progress or {}),
+                    json.dumps(worker or {}),
+                    error,
+                ),
+            )
+        return self.snapshot(execution_id)
+
     def spec_text(self, execution_id: str) -> str:
         """Return the persisted spec bytes after checking them against the registered digest."""
         row = self._row(execution_id)

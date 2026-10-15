@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import signal
@@ -10,11 +11,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .analysis import compare_executions, report_data
 from .diagnostics import diagnose_execution
 from .execution import RunRecord, RunStatus
 from .registry import TERMINAL, Registry, hostname, process_alive
 from .runroot import resolve_run_root
-from .specs import ExperimentSpec
+from .specs import ExperimentSpec, canonical_json
 from .validation import discover_providers, dry_run, validate_experiment
 
 
@@ -68,6 +70,48 @@ def _record_dict(record: RunRecord) -> dict[str, object]:
     return {**record.to_dict()}
 
 
+def register_legacy_manifest(registry: Registry, manifest_path: str) -> RunRecord:
+    """Register a completed historical manifest under the configured run root."""
+    path = Path(manifest_path).resolve()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if "experiment" not in payload or "record" not in payload:
+        raise ValueError("legacy manifest must contain experiment and record")
+
+    spec = ExperimentSpec.from_json(canonical_json(payload["experiment"]))
+    record_payload = payload["record"]
+    status = RunStatus(record_payload["status"])
+    if status not in TERMINAL:
+        raise ValueError("legacy manifest record must be terminal")
+
+    run_directory = path.parent
+    try:
+        relative = run_directory.relative_to(registry.root)
+    except ValueError as exc:
+        raise ValueError("legacy manifest must be inside the configured run root") from exc
+
+    spec_path = run_directory / "spec.json"
+    if not spec_path.exists():
+        raise ValueError("legacy execution directory is missing spec.json")
+    digest = hashlib.sha256(spec_path.read_bytes()).hexdigest()
+
+    return registry.register_legacy(
+        execution_id=record_payload["execution_id"],
+        run_id=spec.run_id,
+        data_id=spec.data_id,
+        status=status,
+        created_at=record_payload["created_at"],
+        started_at=record_payload.get("started_at"),
+        finished_at=record_payload.get("finished_at"),
+        heartbeat_at=record_payload.get("finished_at") or record_payload.get("started_at")
+        or record_payload["created_at"],
+        execution_dir=str(relative),
+        spec_sha256=digest,
+        progress=record_payload.get("progress") or {},
+        worker=record_payload.get("worker") or {},
+        error=record_payload.get("error"),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mcmc-platform")
     parser.add_argument("--run-root", help="registry and run artifact directory (or set "
@@ -84,6 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("execution_id")
     sub = commands.add_parser("diagnose")
     sub.add_argument("execution_id")
+    sub = commands.add_parser("report-data")
+    sub.add_argument("execution_id")
+    sub = commands.add_parser("compare")
+    sub.add_argument("execution_ids", nargs="+")
+    sub = commands.add_parser("register-legacy")
+    sub.add_argument("manifest", help="path to a completed manifest.json")
     commands.add_parser("list", help="list registered executions")
     return parser
 
@@ -113,6 +163,12 @@ def main(argv: list[str] | None = None) -> int:
             _emit(_record_dict(cancel(registry, args.execution_id)))
         elif args.command == "diagnose":
             _emit(diagnose_execution(registry, args.execution_id))
+        elif args.command == "report-data":
+            _emit(report_data(registry, args.execution_id))
+        elif args.command == "compare":
+            _emit(compare_executions(registry, args.execution_ids))
+        elif args.command == "register-legacy":
+            _emit(_record_dict(register_legacy_manifest(registry, args.manifest)))
         elif args.command == "list":
             _emit([_record_dict(registry.reconcile(r.execution_id)) for r in registry.list()])
         return 0
