@@ -10,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .diagnostics import diagnose_execution
 from .execution import RunRecord, RunStatus
 from .registry import TERMINAL, Registry, hostname, process_alive
 from .runroot import resolve_run_root
@@ -81,6 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("status", "cancel"):
         sub = commands.add_parser(name)
         sub.add_argument("execution_id")
+    sub = commands.add_parser("diagnose")
+    sub.add_argument("execution_id")
     commands.add_parser("list", help="list registered executions")
     return parser
 
@@ -108,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
             _emit(_record_dict(registry.reconcile(args.execution_id)))
         elif args.command == "cancel":
             _emit(_record_dict(cancel(registry, args.execution_id)))
+        elif args.command == "diagnose":
+            _emit(diagnose_execution(registry, args.execution_id))
         elif args.command == "list":
             _emit([_record_dict(registry.reconcile(r.execution_id)) for r in registry.list()])
         return 0
