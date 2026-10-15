@@ -9,5 +9,8 @@ description = "Research code for multiproposal MCMC"
 authors = [{ name = "Guillermina Senn" }]
 dependencies = []
 
+[project.scripts]
+mcmc-platform = "multiproposal.platform.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

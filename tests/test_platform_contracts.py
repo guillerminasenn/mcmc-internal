@@ -3,6 +3,7 @@
 from dataclasses import FrozenInstanceError, replace
 import json
 import unittest
+from unittest.mock import patch
 
 from multiproposal.platform import (
     ArtifactRecord,
@@ -26,6 +27,7 @@ from multiproposal.platform import (
     content_hash,
     validate_runtime,
 )
+from multiproposal.platform.validation import discover_providers
 
 
 def example_spec(**overrides):
@@ -235,6 +237,27 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             GaussianPriorAdapter(target)
 
+        class MissingGaussianFactor:
+            dim = 2
+
+            def log_posterior(self, parameters):
+                return 0.0
+
+            def log_prior(self, parameters):
+                return 0.0
+
+            def log_likelihood(self, parameters):
+                return 0.0
+
+            def prior_mean(self):
+                return (0.0, 0.0)
+
+            def sample_prior(self, rng):
+                return (0.0, 0.0)
+
+        with self.assertRaisesRegex(ValueError, "requires L"):
+            validate_runtime(MissingGaussianFactor(), ("gaussian_prior",))
+
     def test_adapter_preserves_real_gaussian_problem_values_and_rng(self):
         """Compare real legacy prior draws and densities without running MCMC."""
         try:
@@ -256,10 +279,52 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(adapter.log_prior(parameters), problem.log_prior(parameters))
         self.assertEqual(adapter.log_likelihood(parameters), problem.log_likelihood(parameters))
         self.assertEqual(adapter.log_posterior(parameters), problem.log_posterior(parameters))
+        self.assertIs(adapter.L, problem.L)
+        from multiproposal.algorithms.pcn import pcn_step
+        direct_state = np.random.default_rng(7)
+        adapted_state = np.random.default_rng(7)
+        direct_step = pcn_step(parameters, problem, direct_state)
+        adapted_step = pcn_step(parameters, adapter, adapted_state)
+        np.testing.assert_array_equal(direct_step[0], adapted_step[0])
+        self.assertEqual(direct_step[1], adapted_step[1])
+        self.assertEqual(direct_state.bit_generator.state, adapted_state.bit_generator.state)
         direct_rng = np.random.default_rng(42)
         adapted_rng = np.random.default_rng(42)
         np.testing.assert_array_equal(problem.sample_prior(direct_rng), adapter.sample_prior(adapted_rng))
         self.assertEqual(direct_rng.bit_generator.state, adapted_rng.bit_generator.state)
+
+
+class ProviderDiscoveryTests(unittest.TestCase):
+    class FakeDist:
+        def __init__(self, name: str, version: str):
+            self.name = name
+            self.version = version
+
+    class FakeEntryPoint:
+        def __init__(self, name: str, loaded=None, error: Exception | None = None,
+                     dist_name: str = "fixture", dist_version: str = "1.0"):
+            self.name = name
+            self.loaded = loaded
+            self.error = error
+            self.dist = ProviderDiscoveryTests.FakeDist(dist_name, dist_version)
+
+        def load(self):
+            if self.error:
+                raise self.error
+            return self.loaded
+
+    def test_duplicate_provider_name_is_rejected(self):
+        points = [
+            self.FakeEntryPoint("polar-twist", loaded=object(), dist_name="pkg-a", dist_version="1.0"),
+            self.FakeEntryPoint("polar-twist", loaded=object(), dist_name="pkg-b", dist_version="2.0"),
+            self.FakeEntryPoint("other", loaded=object(), dist_name="pkg-c", dist_version="1.1"),
+        ]
+        with patch("multiproposal.platform.validation.entry_points", return_value=points):
+            providers, failures = discover_providers()
+        self.assertIn("other", providers)
+        self.assertNotIn("polar-twist", providers)
+        self.assertIn("polar-twist", failures)
+        self.assertIn("Multiple installed providers", failures["polar-twist"])
 
 
 class ResultAndExecutionTests(unittest.TestCase):

@@ -115,6 +115,26 @@ class SimulationProvider(Protocol):
 
 
 @runtime_checkable
+class PriorProvider(Protocol):
+    """Optional prior sampling that does not require observed data or a sampler."""
+
+    def sample_prior(self, model: Mapping[str, object], rng: Any) -> Any:
+        """Draw one parameter value using only the supplied random generator."""
+        ...
+
+
+@runtime_checkable
+class PriorPredictiveProvider(Protocol):
+    """Optional prior-predictive exploration for headless inspection."""
+
+    def prior_predictive(
+        self, model: Mapping[str, object], rng: Any, samples: int,
+    ) -> Mapping[str, Any]:
+        """Return prior parameter and simulated observation arrays."""
+        ...
+
+
+@runtime_checkable
 class ReferenceProvider(Protocol):
     """Optional reference calculation; no sampler or GUI is required."""
 
@@ -167,6 +187,11 @@ class GaussianPriorRuntime(RuntimeProblem, Protocol):
         """Return the Gaussian prior mean."""
         ...
 
+    @property
+    def L(self) -> Any:
+        """Return the prior covariance Cholesky factor used by Gaussian kernels."""
+        ...
+
     def sample_prior(self, rng: Any) -> Any:
         """Sample the prior using the supplied generator."""
         ...
@@ -198,6 +223,8 @@ def validate_runtime(problem: object, capabilities: tuple[str, ...]) -> None:
         for operation in operations.get(capability, ()):
             if not callable(getattr(problem, operation, None)):
                 raise ValueError(f"Capability {capability!r} requires {operation}()")
+        if capability == "gaussian_prior" and not hasattr(problem, "L"):
+            raise ValueError("Capability 'gaussian_prior' requires L")
 
 
 @dataclass(frozen=True)
@@ -214,6 +241,11 @@ class GaussianPriorAdapter:
     def dim(self) -> int:
         """Return the unchanged legacy parameter dimension."""
         return self.problem.dim
+
+    @property
+    def L(self) -> Any:
+        """Expose the Cholesky factor required by existing Gaussian-prior samplers."""
+        return self.problem.L
 
     @property
     def capabilities(self) -> tuple[str, ...]:

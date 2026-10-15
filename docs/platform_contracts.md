@@ -34,11 +34,11 @@ point will load an object with these operations, not a sampler or a factory:
   It must not launch a sampler, generate unrecorded randomness, or discover data
   through the current working directory.
 
-Illustrative registration only; no provider is registered in this stage:
+The first installed provider is registered by `mess-internal`:
 
 ```toml
 [project.entry-points."bayesian.problem_providers"]
-example = "example_bip.providers:provider"
+polar-twist = "mess.providers.polar_twist:provider"
 ```
 
 `VariableSpec` records `name`, ordered `dims`, `shape`, optional scalar coordinate
@@ -53,17 +53,28 @@ Optional operations are independent structural protocols:
 
 - `SimulationProvider.simulate(model, rng)` produces observations/truth using
   the supplied generator.
+- `PriorProvider.sample_prior(model, rng)` and
+  `PriorPredictiveProvider.prior_predictive(model, rng, samples)` expose optional
+  model exploration without requiring observed data or a sampler.
 - `ForwardProblem.forward(parameters)` evaluates noise-free observables.
 - `ReferenceProvider.reference(model, data, config)` returns reference arrays
   and accuracy metadata for explicit numerical settings.
 - `PlotDataProvider.plot_data(view, arrays, selection)` computes domain plot data
   without rendering, writing samples, or mutating selection state.
 
+Phase 4 registers only polar twist. Its implementation wraps the existing
+`mess.problems.polar_twist` scientific code and imports neither BayesLab nor this
+platform package. Provider-level prior sampling and prior-predictive generation
+do not require observed data. Other catalog problems remain unimplemented until
+the polar-twist execution and visualization path is validated.
+
 The minimal inference target, `RuntimeProblem`, exposes `dim` and
 `log_posterior(parameters)`. Gaussian priors, gradients, and generative models
 are not universally required. Known numerical capability names are
-`log_density`, `log_prior`, `log_likelihood`, `sample_prior`, `gaussian_prior`,
-`gradient` (requiring `grad_log_posterior`), and `forward`.
+`log_density`, `log_prior`, `log_likelihood`, `sample_prior`, `gaussian_prior`
+(requiring `prior_mean`, `sample_prior`, `log_prior`, and the Cholesky factor
+`L` used by current Gaussian kernels), `gradient` (requiring
+`grad_log_posterior`), and `forward`.
 `validate_runtime()` checks declared known operations; it cannot prove Gaussianity,
 correct derivatives, or mathematical invariance. Extension capability names
 require their sampler adapter's validation.
@@ -193,3 +204,30 @@ The standard-library tests need no packages; the real Gaussian adapter test
 requires NumPy/SciPy and explicitly skips if they are unavailable. All 24 tests
 passed without skips in an isolated Python 3.12 environment with NumPy 2.5.4 and
 SciPy 1.18.1. This does not certify the LP transition suite or a posterior run.
+## Control Plane (Phase 5, first increment)
+
+`mcmc-platform` (`multiproposal.platform.cli`) provides `providers`, `validate`,
+`dry-run`, `submit`, `status`, `cancel`, and `list`. `validate` and `dry-run` write
+nothing. There is no default run root: pass `--run-root` or set
+`MCMC_PLATFORM_RUN_ROOT`. A root inside a Git repository is rejected unless it is
+ignored (or `--allow-repository-run-root` is given for platform development tests).
+Experiment specs belong to the problem owner; generated runs belong outside
+source control.
+
+`submit` validates, persists `spec.json` (read-only, checksummed in the registry),
+inserts a `pending` row, and only then launches `multiproposal.platform.worker` in a
+new session, so closing the submitting client does not stop it. The worker records
+PID, host, and process start time, heartbeats, writes read-only `.npz` arrays plus
+`costs.json`, writes `manifest.json` atomically, and then marks `completed`.
+`status`/`list` reconcile: a completion manifest wins; a dead or recycled PID (or a
+silent remote worker) becomes `stale`, never `running`; `cancelling` becomes
+`cancelled` once the worker is gone. `cancel` sends SIGTERM only after verifying
+PID, host, and start time. Resume is not supported.
+
+Results are `artifacts/sampler_<i>.npz` with `parameters` shaped
+`(chain, draw, *parameter_shape)`; draws include warmup, as declared in the manifest
+`ResultSchema` (`warmup_included=True`). The only registered sampler is `pcn`; its
+chain `c` uses `SeedSequence(experiment_seed, spawn_key=(0, c, sampler_index))`.
+`execution.chain_delay_seconds` is a testing hook that slows a worker.
+Not yet implemented: diagnostics, comparison, report data, legacy registration,
+other samplers, multi-axis parameters.
