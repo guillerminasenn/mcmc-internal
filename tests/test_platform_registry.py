@@ -207,11 +207,30 @@ class DetachedExecutionTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(data).hexdigest(), artifact["sha256"])
             self.assertFalse(os.access(directory / artifact["path"], os.W_OK))
         import numpy as np
-        schema = manifest["result_schemas"]["sampler_0"]["variables"][0]
-        variable_name = schema["name"]
-        with np.load(directory / "artifacts" / "sampler_0.npz", allow_pickle=False) as archive:
-            self.assertEqual(set(archive.files), {variable_name})
-            self.assertEqual(archive[variable_name].shape, (4, 40, 2))
+        schema = manifest["result_schemas"]["sampler_0"]
+        variable_name = schema["variables"][0]["name"]
+        artifact = next(item for item in manifest["artifacts"] if item["path"] == "artifacts/sampler_0.npz")
+        dimensions = {
+            variable["name"]: tuple(variable["dims"]) for variable in schema["variables"]
+        }
+        try:
+            from bayeslab.results import read_npz_result
+        except ImportError:
+            self.skipTest("bayeslab is not installed")
+        loaded = read_npz_result(
+            directory / artifact["path"],
+            sha256=artifact["sha256"],
+            dimensions=dimensions,
+            warmup=schema["warmup_draws"],
+            warmup_stored=schema["warmup_included"],
+        )
+        self.assertEqual(set(loaded.arrays), {variable_name})
+        self.assertEqual(loaded.arrays[variable_name].shape, (4, 40, 2))
+        self.assertFalse(loaded.arrays[variable_name].flags.writeable)
+        np.testing.assert_array_equal(
+            loaded.select(variable_name, phase="posterior"),
+            loaded.arrays[variable_name][:, 10:],
+        )
         self.assertIn("starting", (directory / "logs" / "stdout.log").read_text())
 
     def test_cancel_running_worker(self):
