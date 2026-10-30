@@ -13,7 +13,7 @@ from pathlib import Path
 from multiproposal.platform import (
     ExperimentSpec, ProblemSpec, RunStatus, SamplerSpec, SeedSpec,
 )
-from multiproposal.platform.registry import Registry, TransitionError, utc_now
+from multiproposal.platform.registry import Registry, TransitionError, read_registry_records, utc_now
 from multiproposal.platform.runroot import RunRootError, resolve_run_root
 
 CAPS = ("gaussian_prior", "log_likelihood", "log_density", "log_prior", "sample_prior")
@@ -89,6 +89,29 @@ class RegistryTests(unittest.TestCase):
         retry = self.registry.register(spec)
         self.assertEqual(retry.run_id, record.run_id)
         self.assertNotEqual(retry.execution_id, record.execution_id)
+
+    def test_read_only_discovery_preserves_records_without_reconciliation(self):
+        record = self.registry.register(polar_spec())
+        root = self.registry.root
+        before = {str(path): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        rows = read_registry_records(root)
+        self.assertEqual(rows[0]["execution_id"], record.execution_id)
+        self.assertEqual(rows[0]["status"], "pending")
+        self.assertEqual(rows[0]["run_root"], record.run_root)
+        self.assertIn("not reconciled", rows[0]["worker_state"])
+        self.assertEqual(before, {str(path): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+
+    def test_read_only_missing_root_is_not_initialized(self):
+        missing = self.registry.root / "missing"
+        self.assertEqual(read_registry_records(missing), [])
+        self.assertFalse(missing.exists())
+
+    def test_read_only_discovery_rejects_escaping_execution_paths(self):
+        record = self.registry.register(polar_spec())
+        with self.registry._transaction() as connection:
+            connection.execute("UPDATE runs SET execution_dir = ? WHERE execution_id = ?", ("../outside", record.execution_id))
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            read_registry_records(self.registry.root)
 
     def test_spec_tampering_is_detected(self):
         record = self.registry.register(polar_spec())
@@ -261,6 +284,12 @@ class DetachedExecutionTests(unittest.TestCase):
     def test_validate_and_dry_run_write_nothing(self):
         self.spec_path.write_text(polar_spec().to_json())
         self.assertEqual(run_cli("validate", str(self.spec_path)).returncode, 0)
+        validated = run_cli("validate", "--json", str(self.spec_path))
+        self.assertEqual(validated.returncode, 0)
+        payload = json.loads(validated.stdout)
+        self.assertEqual(payload["status"], "valid")
+        self.assertTrue(str(payload["run_id"]).startswith("run_sha256_"))
+        self.assertTrue(str(payload["data_id"]).startswith("data_sha256_"))
         plan = json.loads(run_cli("dry-run", str(self.spec_path)).stdout)
         self.assertFalse(plan["writes_files"])
         self.assertEqual(plan["planned_log_likelihood_evaluations"]["sampler_0"], 2 * 25 * 2)

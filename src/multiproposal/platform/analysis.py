@@ -10,6 +10,9 @@ import numpy as np
 from .diagnostics import summarize_chain_array
 from .execution import RunStatus
 from .registry import Registry
+from .results import ArtifactRecord, ResultSchema
+from .problems import VariableSpec
+from .specs import ExperimentSpec, content_hash
 
 
 def _checksum(path: Path) -> str:
@@ -34,14 +37,72 @@ def _execution_payload(registry: Registry, execution_id: str) -> dict[str, objec
     if record.status != RunStatus.COMPLETED:
         raise ValueError(f"Execution is not completed: {record.status.value}")
 
-    run_dir = Path(record.run_root)
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    return bundle_report_data(record.run_root)
+
+
+def bundle_file(bundle: Path, relative: str) -> Path:
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("Bundle path must be relative without traversal")
+    resolved = (bundle / path).resolve()
+    if not resolved.is_relative_to(bundle.resolve()):
+        raise ValueError("Bundle path escapes the selected execution directory")
+    return resolved
+
+
+def load_bundle_manifest(bundle_path: str | Path) -> tuple[Path, dict]:
+    run_dir = Path(bundle_path).expanduser().resolve()
+    if run_dir.is_file() and run_dir.name == "manifest.json":
+        run_dir = run_dir.parent
+    manifest = json.loads(bundle_file(run_dir, "manifest.json").read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("record"), dict):
+        raise ValueError("Manifest requires an execution record")
+    if manifest["record"].get("status") != "completed":
+        raise ValueError("Standalone bundles must be completed; live worker state is unavailable")
+    spec = ExperimentSpec.from_json(bundle_file(run_dir, "spec.json").read_text(encoding="utf-8"))
+    if manifest.get("experiment") != spec.to_dict():
+        raise ValueError("Bundle configuration does not match its manifest")
+    if manifest.get("resolved_spec_sha256") != content_hash(spec):
+        raise ValueError("Bundle configuration checksum mismatch")
+    if (manifest["record"].get("run_id"), manifest["record"].get("data_id")) != (spec.run_id, spec.data_id):
+        raise ValueError("Bundle execution identity does not match its configuration")
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("Completed bundle requires artifact metadata")
+    seen = set()
+    for entry in artifacts:
+        artifact = ArtifactRecord(**entry)
+        if artifact.path in seen:
+            raise ValueError("Duplicate bundle artifact path")
+        seen.add(artifact.path)
+        path = bundle_file(run_dir, artifact.path)
+        if path.stat().st_size != artifact.size_bytes or _checksum(path) != artifact.sha256:
+            raise ValueError(f"Artifact checksum mismatch: {artifact.path}")
+    schemas = manifest.get("result_schemas")
+    if not isinstance(schemas, dict) or set(schemas) != {f"sampler_{index}" for index in range(len(spec.samplers))}:
+        raise ValueError("Bundle sampler schemas do not match configuration")
+    for name, raw in schemas.items():
+        schema = ResultSchema(**{**raw, "variables": tuple(VariableSpec(**item) for item in raw["variables"])})
+        expected_draws = spec.draws + (spec.warmup if schema.warmup_included else 0)
+        if schema.warmup_draws != spec.warmup or schema.variables[0].shape[:2] != (spec.chains, expected_draws):
+            raise ValueError("Bundle result schema does not match configuration")
+        relative = f"artifacts/{name}.npz"
+        if relative not in seen:
+            raise ValueError(f"Manifest artifact missing for {name}")
+        with np.load(bundle_file(run_dir, relative), allow_pickle=False) as archive:
+            schema.validate_arrays({key: archive[key] for key in archive.files})
+    return run_dir, manifest
+
+
+def bundle_report_data(bundle_path: str | Path) -> dict[str, object]:
+    """Read a sealed copied execution without a registry or archived absolute paths."""
+    run_dir, manifest = load_bundle_manifest(bundle_path)
     artifacts = {entry["path"]: entry for entry in manifest["artifacts"]}
 
     costs_artifact = artifacts.get("artifacts/costs.json")
     costs: dict[str, object] = {}
     if costs_artifact is not None:
-        costs_path = run_dir / costs_artifact["path"]
+        costs_path = bundle_file(run_dir, costs_artifact["path"])
         if _checksum(costs_path) != costs_artifact["sha256"]:
             raise ValueError("Artifact checksum mismatch: artifacts/costs.json")
         costs = json.loads(costs_path.read_text(encoding="utf-8"))
@@ -52,7 +113,7 @@ def _execution_payload(registry: Registry, execution_id: str) -> dict[str, objec
         artifact = artifacts.get(artifact_path)
         if artifact is None:
             raise ValueError(f"Manifest artifact missing for {sampler_name}")
-        path = run_dir / artifact["path"]
+        path = bundle_file(run_dir, artifact["path"])
         if _checksum(path) != artifact["sha256"]:
             raise ValueError(f"Artifact checksum mismatch: {artifact['path']}")
 
@@ -90,10 +151,11 @@ def _execution_payload(registry: Registry, execution_id: str) -> dict[str, objec
         samplers[sampler_name] = sampler_output
 
     return {
-        "execution_id": execution_id,
+        "bundle_path": str(run_dir),
+        "execution_id": manifest["record"]["execution_id"],
         "run_id": manifest["record"]["run_id"],
         "data_id": manifest["record"]["data_id"],
-        "status": record.status.value,
+        "status": manifest["record"]["status"],
         "samplers": samplers,
         "costs": costs,
     }
@@ -109,6 +171,17 @@ def compare_executions(registry: Registry, execution_ids: list[str]) -> dict[str
     if len(execution_ids) < 2:
         raise ValueError("compare requires at least two execution IDs")
     reports = [_execution_payload(registry, execution_id) for execution_id in execution_ids]
+    return _compare_reports(reports)
+
+
+def compare_bundles(bundle_paths: list[str | Path]) -> dict[str, object]:
+    if len(bundle_paths) < 2:
+        raise ValueError("compare requires at least two bundles")
+    return _compare_reports([bundle_report_data(path) for path in bundle_paths])
+
+
+def _compare_reports(reports: list[dict]) -> dict[str, object]:
+    execution_ids = [report["execution_id"] for report in reports]
     baseline = reports[0]
     comparisons: dict[str, object] = {}
 

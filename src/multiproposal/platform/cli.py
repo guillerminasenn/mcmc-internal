@@ -21,6 +21,8 @@ from .validation import discover_providers, dry_run, validate_experiment
 
 
 def load_spec(path: str) -> ExperimentSpec:
+    if path == "-":
+        return ExperimentSpec.from_json(sys.stdin.read())
     return ExperimentSpec.from_json(Path(path).read_text(encoding="utf-8"))
 
 
@@ -122,6 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("providers", help="list installed problem providers")
     for name in ("validate", "dry-run", "submit"):
         sub = commands.add_parser(name)
+        if name == "validate":
+            sub.add_argument("--json", action="store_true", dest="json_output",
+                             help="emit machine-readable validation output")
         sub.add_argument("spec", help="resolved experiment JSON")
     for name in ("status", "cancel"):
         sub = commands.add_parser(name)
@@ -147,8 +152,12 @@ def main(argv: list[str] | None = None) -> int:
                    "failed": failures})
             return 0
         if args.command == "validate":
-            validate_experiment(load_spec(args.spec))
-            print("valid")
+            spec = load_spec(args.spec)
+            validate_experiment(spec)
+            if getattr(args, "json_output", False):
+                _emit({"status": "valid", "run_id": spec.run_id, "data_id": spec.data_id})
+            else:
+                print("valid")
             return 0
         if args.command == "dry-run":
             _emit(dry_run(load_spec(args.spec)))

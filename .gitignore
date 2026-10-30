@@ -4,3 +4,7 @@ estimations/
 data/
 .vscode/
 .multip-env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/

@@ -214,6 +214,42 @@ ignored (or `--allow-repository-run-root` is given for platform development test
 Experiment specs belong to the problem owner; generated runs belong outside
 source control.
 
+### Workbench storage amendment (2026-10-19; verified correction)
+
+The local BayesLab workbench uses an explicitly configured
+`bayeslab/experiments/<bip>/runs/` as its per-problem registry/artifact root,
+with populated inputs in sibling `configurations/`, optional observations in
+`data/`, and separate exports in `reports/`. The entire BayesLab `/experiments/`
+tree must be ignored before runtime writes. Scientific providers/recipes remain
+BIPs-owned; execution, SQLite state, bundle layout, and NPZ chain storage remain
+platform-owned. No global registry or new chain store is introduced.
+
+Focused tests verify the existing repository-output guard accepts ignored
+workspace storage and continues to reject unignored repository paths. No guard
+change or development override was needed. The platform's explicit external-root
+CLI support remains unchanged; the BayesLab UI confines its implemented path
+operations to its launch-configured experiment root, including pasted paths,
+symlinks, artifacts, and submission destinations. Browser acceptance covers this
+correction; scientific/durability gates and later UI stages remain open.
+
+`analysis.load_bundle_manifest(path)` accepts a completed execution folder or
+manifest without a registry, validates its resolved configuration identity/hash,
+artifact paths/sizes/checksums, and schema/array agreement, and uses its actual
+directory rather than archived absolute paths. `bundle_report_data(path)` and
+`compare_bundles(paths)` reuse platform report calculations without registration.
+`registry.read_registry_records(root)` reads an existing SQLite registry without
+initialization, reconciliation, or writes. It reports recorded snapshots only,
+not live-worker certification; standalone bundles have no live worker evidence.
+
+Existing BIPs smoke and historical bundles stay unchanged at their original
+paths. Any separately requested copy into the workspace must verify source and
+destination checksums, reject conflicts, load relative to the copied directory,
+and neither rewrite sealed manifests nor silently register copies. Active runs
+stay at their original roots. BayesLab's explicit `init-workspace` creates empty
+storage; `import-bundle` performs an optional verified copy and rejects conflicts
+and symbolic links. Only synthetic temporary bundles were imported in tests.
+No historical move/import, submission enablement, or sampling was performed.
+
 `submit` validates, persists `spec.json` (read-only, checksummed in the registry),
 inserts a `pending` row, and only then launches `multiproposal.platform.worker` in a
 new session, so closing the submitting client does not stop it. The worker records

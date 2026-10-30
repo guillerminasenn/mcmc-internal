@@ -41,6 +41,37 @@ class TransitionError(ValueError):
     """A requested status change is not a legal registry transition."""
 
 
+def read_registry_records(root: str | Path) -> list[dict]:
+    """Read recorded state without initialization, reconciliation, or SQLite writes."""
+    root = Path(root).resolve()
+    database = (root / REGISTRY_FILENAME).resolve()
+    if not database.is_relative_to(root):
+        raise ValueError("Registry path escapes its results root")
+    if not database.is_file():
+        return []
+    connection = sqlite3.connect(database.as_uri() + "?mode=ro&immutable=1", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        records = []
+        for row in connection.execute("SELECT * FROM runs ORDER BY created_at DESC"):
+            directory = (root / row["execution_dir"]).resolve()
+            if not directory.is_relative_to(root):
+                raise ValueError("Registered execution path escapes its results root")
+            records.append({
+                key: row[key] for key in (
+                    "execution_id", "run_id", "data_id", "status", "created_at",
+                    "started_at", "finished_at", "error",
+                )
+            } | {
+                "run_root": str(directory), "resolved_spec_path": str(directory / "spec.json"),
+                "progress": json.loads(row["progress"]), "worker": json.loads(row["worker"]),
+                "worker_state": "recorded snapshot; live state not reconciled",
+            })
+        return records
+    finally:
+        connection.close()
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
