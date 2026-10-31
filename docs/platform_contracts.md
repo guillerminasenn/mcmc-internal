@@ -267,3 +267,63 @@ chain `c` uses `SeedSequence(experiment_seed, spawn_key=(0, c, sampler_index))`.
 `execution.chain_delay_seconds` is a testing hook that slows a worker.
 Not yet implemented: diagnostics, comparison, report data, legacy registration,
 other samplers, multi-axis parameters.
+
+## Applied Analysis Selection (2026-10-31)
+
+This amendment supersedes historical "not implemented" statements above for
+analysis/reporting; it does not certify sampling, reference accuracy, or durability.
+
+`analysis.select_chain_array(values, cutoff=None, warmup_draws=0,
+warmup_included=False, chains=None)` returns a frozen `DrawSelection` with a
+read-only array. Cutoff `B` is the first included stored draw: retain
+`values[:, B:, ...]`, once, with integer `0 <= B < N`. Booleans, nonintegers,
+negative and out-of-range cutoffs are rejected. The default is recorded warmup
+when that prefix is stored, otherwise zero. Missing warmup cannot be recovered.
+Intrinsic axes and repeated states are preserved; selected chain IDs remain
+the original archive indices, including when reordered.
+
+Selection metadata records applied cutoff, stored/retained draw counts, retained
+sample count, original chain IDs, recorded warmup, and whether warmup was stored.
+It is analysis metadata, not a replacement experiment spec or manifest. The pCN
+warmup prefix is part of its fixed-rho trajectory, not a separate tuning chain;
+zero refers to the first stored state, not an omitted initial state.
+
+`analysis.summarize_selection(selection)` computes mean/std, component and total
+MSJD, and component diagnostics from the same retained values.
+`bundle_report_data` and `report_data` accept optional keyword `cutoff`, `chains`,
+`sampler`, and `variable`; defaults preserve recorded-warmup behavior and existing
+report keys. `diagnostics.diagnose_execution` accepts cutoff/chains and reuses the
+validated report path. No registration or artifact writes are added.
+
+Means/stds, MSJD, and ArviZ metrics are finite scalars or `None`, with additive
+availability reasons. `summarize_chain_array` retains its five metric keys and
+coarse `status`/`warnings`: `unavailable` means at least one metric is unavailable,
+not necessarily all. Its `availability` mapping identifies each reason. R-hat
+requires two chains; ESS/MCSE support one chain with at least four draws. Short,
+nonfinite, or within-chain constant inputs are conservatively unavailable for
+ArviZ metrics, even when ArviZ returns a nominal constant-chain ESS. Individual
+nonfinite results do not suppress other supported metrics. Comparisons propagate
+unavailable moments as unavailable deltas.
+
+`diagnostics.summarize_msjd` averages squared successive retained-state distances
+within chains, including zero/rejection repeats and never joining chains. Total
+MSJD sums over intrinsic coordinates and is in squared-coordinate units. Fewer
+than two states makes it unavailable; constant trajectories can have zero MSJD.
+Neither MSJD nor a finite diagnostic certifies convergence.
+
+BayesLab's read-only reader and inspection orchestration reuse this selection.
+Posterior density, summaries, diagnostics, autocorrelation and future rank inputs
+share retained draws; traces keep all stored draws and use an independent display
+window. Caller-owned previous inspection payloads can reuse prior, observations
+and reference data when resolved-spec checksum and rendering parameters match.
+There is no global cache. Editable recomputation UI, persistence and rank plots
+remain later stages.
+
+### Derived source provenance amendment (2026-10-31)
+
+`analysis.bundle_analysis_provenance(path)` reuses the validated standalone-bundle
+loader and returns source manifest/resolved-spec/artifact digests plus the original
+manifest provenance. BayesLab captures this snapshot for inspection and checks it
+again during computation and saving, rejecting changed sources rather than
+attaching old metrics to new artifact digests. Derived generation storage and
+rendering remain BayesLab-owned; no source manifest, chain or registry is rewritten.
